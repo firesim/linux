@@ -12,7 +12,7 @@
 
 	/* rdi:	arg1 ... normal C conventions. rax is saved/restored. */
 	.macro THUNK name, func, put_ret_addr_in_rdi=0
-	ENTRY(\name)
+SYM_FUNC_START_NOALIGN(\name)
 	pushq %rbp
 	movq %rsp, %rbp
 
@@ -33,7 +33,7 @@
 
 	call \func
 	jmp  .L_restore
-	ENDPROC(\name)
+SYM_FUNC_END(\name)
 	_ASM_NOKPROBE(\name)
 	.endm
 
@@ -46,17 +46,17 @@
 	THUNK lockdep_sys_exit_thunk,lockdep_sys_exit
 #endif
 
-#ifdef CONFIG_PREEMPT
-	THUNK ___preempt_schedule, preempt_schedule
-	THUNK ___preempt_schedule_notrace, preempt_schedule_notrace
-	EXPORT_SYMBOL(___preempt_schedule)
-	EXPORT_SYMBOL(___preempt_schedule_notrace)
+#ifdef CONFIG_PREEMPTION
+	THUNK preempt_schedule_thunk, preempt_schedule
+	THUNK preempt_schedule_notrace_thunk, preempt_schedule_notrace
+	EXPORT_SYMBOL(preempt_schedule_thunk)
+	EXPORT_SYMBOL(preempt_schedule_notrace_thunk)
 #endif
 
 #if defined(CONFIG_TRACE_IRQFLAGS) \
  || defined(CONFIG_DEBUG_LOCK_ALLOC) \
- || defined(CONFIG_PREEMPT)
-.L_restore:
+ || defined(CONFIG_PREEMPTION)
+SYM_CODE_START_LOCAL_NOALIGN(.L_restore)
 	popq %r11
 	popq %r10
 	popq %r9
@@ -69,4 +69,5 @@
 	popq %rbp
 	ret
 	_ASM_NOKPROBE(.L_restore)
+SYM_CODE_END(.L_restore)
 #endif

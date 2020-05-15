@@ -33,7 +33,7 @@ struct combiner {
 	int                 parent_irq;
 	u32                 nirqs;
 	u32                 nregs;
-	struct combiner_reg regs[0];
+	struct combiner_reg regs[];
 };
 
 static inline int irq_nr(u32 reg, u32 bit)
@@ -248,10 +248,8 @@ static int __init combiner_probe(struct platform_device *pdev)
 		return err;
 
 	combiner->parent_irq = platform_get_irq(pdev, 0);
-	if (combiner->parent_irq <= 0) {
-		dev_err(&pdev->dev, "Error getting IRQ resource\n");
+	if (combiner->parent_irq <= 0)
 		return -EPROBE_DEFER;
-	}
 
 	combiner->domain = irq_domain_create_linear(pdev->dev.fwnode, combiner->nirqs,
 						    &domain_ops, combiner);

@@ -23,14 +23,31 @@
 #include "omap-mcbsp.h"
 #include "../codecs/cx20442.h"
 
+static struct gpio_desc *handset_mute;
+static struct gpio_desc *handsfree_mute;
+
+static int ams_delta_event_handset(struct snd_soc_dapm_widget *w,
+				   struct snd_kcontrol *k, int event)
+{
+	gpiod_set_value_cansleep(handset_mute, !SND_SOC_DAPM_EVENT_ON(event));
+	return 0;
+}
+
+static int ams_delta_event_handsfree(struct snd_soc_dapm_widget *w,
+				     struct snd_kcontrol *k, int event)
+{
+	gpiod_set_value_cansleep(handsfree_mute, !SND_SOC_DAPM_EVENT_ON(event));
+	return 0;
+}
+
 /* Board specific DAPM widgets */
 static const struct snd_soc_dapm_widget ams_delta_dapm_widgets[] = {
 	/* Handset */
 	SND_SOC_DAPM_MIC("Mouthpiece", NULL),
-	SND_SOC_DAPM_HP("Earpiece", NULL),
+	SND_SOC_DAPM_HP("Earpiece", ams_delta_event_handset),
 	/* Handsfree/Speakerphone */
 	SND_SOC_DAPM_MIC("Microphone", NULL),
-	SND_SOC_DAPM_SPK("Speaker", NULL),
+	SND_SOC_DAPM_SPK("Speaker", ams_delta_event_handsfree),
 };
 
 /* How they are connected to codec pins */
@@ -443,14 +460,14 @@ static void ams_delta_shutdown(struct snd_pcm_substream *substream)
 
 static int ams_delta_cx20442_init(struct snd_soc_pcm_runtime *rtd)
 {
-	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, 0);
 	struct snd_soc_card *card = rtd->card;
 	struct snd_soc_dapm_context *dapm = &card->dapm;
 	int ret;
 	/* Codec is ready, now add/activate board specific controls */
 
 	/* Store a pointer to the codec structure for tty ldisc use */
-	cx20442_codec = rtd->codec_dai->component;
+	cx20442_codec = asoc_rtd_to_codec(rtd, 0)->component;
 
 	/* Add hook switch - can be used to control the codec from userspace
 	 * even if line discipline fails */
@@ -541,6 +558,16 @@ static int ams_delta_probe(struct platform_device *pdev)
 	int ret;
 
 	card->dev = &pdev->dev;
+
+	handset_mute = devm_gpiod_get(card->dev, "handset_mute",
+				      GPIOD_OUT_HIGH);
+	if (IS_ERR(handset_mute))
+		return PTR_ERR(handset_mute);
+
+	handsfree_mute = devm_gpiod_get(card->dev, "handsfree_mute",
+					GPIOD_OUT_HIGH);
+	if (IS_ERR(handsfree_mute))
+		return PTR_ERR(handsfree_mute);
 
 	ret = snd_soc_register_card(card);
 	if (ret) {

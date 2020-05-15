@@ -135,10 +135,6 @@ struct fb_cursor_user {
 
 /*      A display blank is requested       */
 #define FB_EVENT_BLANK                  0x09
-/*      A hardware display blank early change occurred */
-#define FB_EARLY_EVENT_BLANK		0x10
-/*      A hardware display blank revert early change occurred */
-#define FB_R_EARLY_EVENT_BLANK		0x11
 
 struct fb_event {
 	struct fb_info *info;
@@ -476,7 +472,7 @@ struct fb_info {
 	struct fb_deferred_io *fbdefio;
 #endif
 
-	struct fb_ops *fbops;
+	const struct fb_ops *fbops;
 	struct device *device;		/* This is the parent */
 	struct device *dev;		/* This is this fb device */
 	int class_flag;                    /* private sysfs flags */
@@ -610,8 +606,7 @@ extern ssize_t fb_sys_write(struct fb_info *info, const char __user *buf,
 /* drivers/video/fbmem.c */
 extern int register_framebuffer(struct fb_info *fb_info);
 extern void unregister_framebuffer(struct fb_info *fb_info);
-extern void unlink_framebuffer(struct fb_info *fb_info);
-extern int remove_conflicting_pci_framebuffers(struct pci_dev *pdev, int res_id,
+extern int remove_conflicting_pci_framebuffers(struct pci_dev *pdev,
 					       const char *name);
 extern int remove_conflicting_framebuffers(struct apertures_struct *a,
 					   const char *name, bool primary);
@@ -630,6 +625,7 @@ extern int fb_new_modelist(struct fb_info *info);
 extern struct fb_info *registered_fb[FB_MAX];
 extern int num_registered_fb;
 extern bool fb_center_logo;
+extern int fb_logo_count;
 extern struct class *fb_class;
 
 #define for_each_registered_fb(i)		\
@@ -721,8 +717,6 @@ extern int fb_parse_edid(unsigned char *edid, struct fb_var_screeninfo *var);
 extern const unsigned char *fb_firmware_edid(struct device *device);
 extern void fb_edid_to_monspecs(unsigned char *edid,
 				struct fb_monspecs *specs);
-extern void fb_edid_add_monspecs(unsigned char *edid,
-				 struct fb_monspecs *specs);
 extern void fb_destroy_modedb(struct fb_videomode *modedb);
 extern int fb_find_mode_cvt(struct fb_videomode *mode, int margins, int rb);
 extern unsigned char *fb_ddc_read(struct i2c_adapter *adapter);
@@ -796,7 +790,6 @@ struct dmt_videomode {
 
 extern const char *fb_mode_option;
 extern const struct fb_videomode vesa_modes[];
-extern const struct fb_videomode cea_modes[65];
 extern const struct dmt_videomode dmt_modes[];
 
 struct fb_modelist {

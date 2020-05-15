@@ -8,9 +8,10 @@
  * Author: Boris BREZILLON <boris.brezillon@free-electrons.com>
  */
 
+#include <linux/media-bus-format.h>
 #include <linux/of_graph.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_encoder.h>
 #include <drm/drm_of.h>
 #include <drm/drm_bridge.h>
 
@@ -106,13 +107,14 @@ static int atmel_hlcdc_attach_endpoint(struct drm_device *dev, int endpoint)
 	output->encoder.possible_crtcs = 0x1;
 
 	if (panel) {
-		bridge = drm_panel_bridge_add(panel, DRM_MODE_CONNECTOR_Unknown);
+		bridge = drm_panel_bridge_add_typed(panel,
+						    DRM_MODE_CONNECTOR_Unknown);
 		if (IS_ERR(bridge))
 			return PTR_ERR(bridge);
 	}
 
 	if (bridge) {
-		ret = drm_bridge_attach(&output->encoder, bridge, NULL);
+		ret = drm_bridge_attach(&output->encoder, bridge, NULL, 0);
 		if (!ret)
 			return 0;
 

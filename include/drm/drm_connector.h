@@ -41,6 +41,7 @@ struct drm_property;
 struct drm_property_blob;
 struct drm_printer;
 struct edid;
+struct i2c_adapter;
 
 enum drm_connector_force {
 	DRM_FORCE_UNSPECIFIED,
@@ -187,19 +188,19 @@ struct drm_hdmi_info {
 
 	/**
 	 * @y420_vdb_modes: bitmap of modes which can support ycbcr420
-	 * output only (not normal RGB/YCBCR444/422 outputs). There are total
-	 * 107 VICs defined by CEA-861-F spec, so the size is 128 bits to map
-	 * upto 128 VICs;
+	 * output only (not normal RGB/YCBCR444/422 outputs). The max VIC
+	 * defined by the CEA-861-G spec is 219, so the size is 256 bits to map
+	 * up to 256 VICs.
 	 */
-	unsigned long y420_vdb_modes[BITS_TO_LONGS(128)];
+	unsigned long y420_vdb_modes[BITS_TO_LONGS(256)];
 
 	/**
 	 * @y420_cmdb_modes: bitmap of modes which can support ycbcr420
-	 * output also, along with normal HDMI outputs. There are total 107
-	 * VICs defined by CEA-861-F spec, so the size is 128 bits to map upto
-	 * 128 VICs;
+	 * output also, along with normal HDMI outputs. The max VIC defined by
+	 * the CEA-861-G spec is 219, so the size is 256 bits to map up to 256
+	 * VICs.
 	 */
-	unsigned long y420_cmdb_modes[BITS_TO_LONGS(128)];
+	unsigned long y420_cmdb_modes[BITS_TO_LONGS(256)];
 
 	/** @y420_cmdb_map: bitmap of SVD index, to extraxt vcb modes */
 	u64 y420_cmdb_map;
@@ -253,6 +254,23 @@ enum drm_panel_orientation {
 	DRM_MODE_PANEL_ORIENTATION_RIGHT_UP,
 };
 
+/**
+ * struct drm_monitor_range_info - Panel's Monitor range in EDID for
+ * &drm_display_info
+ *
+ * This struct is used to store a frequency range supported by panel
+ * as parsed from EDID's detailed monitor range descriptor block.
+ *
+ * @min_vfreq: This is the min supported refresh rate in Hz from
+ *             EDID's detailed monitor range.
+ * @max_vfreq: This is the max supported refresh rate in Hz from
+ *             EDID's detailed monitor range
+ */
+struct drm_monitor_range_info {
+	u8 min_vfreq;
+	u8 max_vfreq;
+};
+
 /*
  * This is a consolidated colorimetry list supported by HDMI and
  * DP protocol standard. The respective connectors will register
@@ -280,6 +298,10 @@ enum drm_panel_orientation {
 /* Additional Colorimetry extension added as part of CTA 861.G */
 #define DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65		11
 #define DRM_MODE_COLORIMETRY_DCI_P3_RGB_THEATER		12
+/* Additional Colorimetry Options added for DP 1.4a VSC Colorimetry Format */
+#define DRM_MODE_COLORIMETRY_RGB_WIDE_FIXED		13
+#define DRM_MODE_COLORIMETRY_RGB_WIDE_FLOAT		14
+#define DRM_MODE_COLORIMETRY_BT601_YCC			15
 
 /**
  * enum drm_bus_flags - bus_flags info for &drm_display_info
@@ -323,6 +345,8 @@ enum drm_panel_orientation {
  *					edge of the pixel clock
  * @DRM_BUS_FLAG_SYNC_SAMPLE_NEGEDGE:	Sync signals are sampled on the falling
  *					edge of the pixel clock
+ * @DRM_BUS_FLAG_SHARP_SIGNALS:		Set if the Sharp-specific signals
+ *					(SPL, CLS, PS, REV) must be used
  */
 enum drm_bus_flags {
 	DRM_BUS_FLAG_DE_LOW = BIT(0),
@@ -341,6 +365,7 @@ enum drm_bus_flags {
 	DRM_BUS_FLAG_SYNC_DRIVE_NEGEDGE = DRM_BUS_FLAG_SYNC_NEGEDGE,
 	DRM_BUS_FLAG_SYNC_SAMPLE_POSEDGE = DRM_BUS_FLAG_SYNC_NEGEDGE,
 	DRM_BUS_FLAG_SYNC_SAMPLE_NEGEDGE = DRM_BUS_FLAG_SYNC_POSEDGE,
+	DRM_BUS_FLAG_SHARP_SIGNALS = BIT(8),
 };
 
 /**
@@ -427,6 +452,14 @@ struct drm_display_info {
 	bool dvi_dual;
 
 	/**
+	 * @is_hdmi: True if the sink is an HDMI device.
+	 *
+	 * This field shall be used instead of calling
+	 * drm_detect_hdmi_monitor() when possible.
+	 */
+	bool is_hdmi;
+
+	/**
 	 * @has_hdmi_infoframe: Does the sink support the HDMI infoframe?
 	 */
 	bool has_hdmi_infoframe;
@@ -457,6 +490,11 @@ struct drm_display_info {
 	 * @non_desktop: Non desktop display (HMD).
 	 */
 	bool non_desktop;
+
+	/**
+	 * @monitor_range: Frequency range supported by monitor range descriptor
+	 */
+	struct drm_monitor_range_info monitor_range;
 };
 
 int drm_display_info_set_bus_formats(struct drm_display_info *info,
@@ -539,8 +577,8 @@ struct drm_connector_state {
 	 *
 	 * This is also used in the atomic helpers to map encoders to their
 	 * current and previous connectors, see
-	 * &drm_atomic_get_old_connector_for_encoder() and
-	 * &drm_atomic_get_new_connector_for_encoder().
+	 * drm_atomic_get_old_connector_for_encoder() and
+	 * drm_atomic_get_new_connector_for_encoder().
 	 *
 	 * NOTE: Atomic drivers must fill this out (either themselves or through
 	 * helpers), for otherwise the GETCONNECTOR and GETENCODER IOCTLs will
@@ -597,6 +635,12 @@ struct drm_connector_state {
 	 * match the values.
 	 */
 	unsigned int content_type;
+
+	/**
+	 * @hdcp_content_type: Connector property to pass the type of
+	 * protected content. This is most commonly used for HDCP.
+	 */
+	unsigned int hdcp_content_type;
 
 	/**
 	 * @scaling_mode: Connector property to control the
@@ -1056,6 +1100,14 @@ struct drm_cmdline_mode {
 	unsigned int rotation_reflection;
 
 	/**
+	 * @panel_orientation:
+	 *
+	 * drm-connector "panel orientation" property override value,
+	 * DRM_MODE_PANEL_ORIENTATION_UNKNOWN if not set.
+	 */
+	enum drm_panel_orientation panel_orientation;
+
+	/**
 	 * @tv_margins: TV margins to apply to the mode.
 	 */
 	struct drm_connector_tv_margins tv_margins;
@@ -1278,12 +1330,12 @@ struct drm_connector {
 	/** @override_edid: has the EDID been overwritten through debugfs for testing? */
 	bool override_edid;
 
-#define DRM_CONNECTOR_MAX_ENCODER 3
 	/**
-	 * @encoder_ids: Valid encoders for this connector. Please only use
-	 * drm_connector_for_each_possible_encoder() to enumerate these.
+	 * @possible_encoders: Bit mask of encoders that can drive this
+	 * connector, drm_encoder_index() determines the index into the bitfield
+	 * and the bits are set with drm_connector_attach_encoder().
 	 */
-	uint32_t encoder_ids[DRM_CONNECTOR_MAX_ENCODER];
+	u32 possible_encoders;
 
 	/**
 	 * @encoder: Currently bound encoder driving this connector, if any.
@@ -1308,6 +1360,18 @@ struct drm_connector {
 	 * [0]: progressive, [1]: interlaced
 	 */
 	int audio_latency[2];
+
+	/**
+	 * @ddc: associated ddc adapter.
+	 * A connector usually has its associated ddc adapter. If a driver uses
+	 * this field, then an appropriate symbolic link is created in connector
+	 * sysfs directory to make it easy for the user to tell which i2c
+	 * adapter is for a particular display.
+	 *
+	 * The field should be set by calling drm_connector_init_with_ddc().
+	 */
+	struct i2c_adapter *ddc;
+
 	/**
 	 * @null_edid_counter: track sinks that give us all zeros for the EDID.
 	 * Needed to workaround some HW bugs where we get all 0s
@@ -1323,6 +1387,12 @@ struct drm_connector {
 	 * rev1.1 4.2.2.6
 	 */
 	bool edid_corrupt;
+	/**
+	 * @real_edid_checksum: real edid checksum for corrupted edid block.
+	 * Required in Displayport 1.4 compliance testing
+	 * rev1.1 4.2.2.6
+	 */
+	u8 real_edid_checksum;
 
 	/** @debugfs_entry: debugfs directory for this connector */
 	struct dentry *debugfs_entry;
@@ -1396,6 +1466,11 @@ int drm_connector_init(struct drm_device *dev,
 		       struct drm_connector *connector,
 		       const struct drm_connector_funcs *funcs,
 		       int connector_type);
+int drm_connector_init_with_ddc(struct drm_device *dev,
+				struct drm_connector *connector,
+				const struct drm_connector_funcs *funcs,
+				int connector_type,
+				struct i2c_adapter *ddc);
 void drm_connector_attach_edid_property(struct drm_connector *connector);
 int drm_connector_register(struct drm_connector *connector);
 void drm_connector_unregister(struct drm_connector *connector);
@@ -1473,6 +1548,7 @@ drm_connector_is_unregistered(struct drm_connector *connector)
 		DRM_CONNECTOR_UNREGISTERED;
 }
 
+const char *drm_get_connector_type_name(unsigned int connector_type);
 const char *drm_get_connector_status_name(enum drm_connector_status status);
 const char *drm_get_subpixel_order_name(enum subpixel_order order);
 const char *drm_get_dpms_name(int val);
@@ -1481,6 +1557,7 @@ const char *drm_get_dvi_i_select_name(int val);
 const char *drm_get_tv_subconnector_name(int val);
 const char *drm_get_tv_select_name(int val);
 const char *drm_get_content_protection_name(int val);
+const char *drm_get_hdcp_content_type_name(int val);
 
 int drm_mode_create_dvi_i_properties(struct drm_device *dev);
 int drm_mode_create_tv_margin_properties(struct drm_device *dev);
@@ -1495,7 +1572,8 @@ int drm_connector_attach_scaling_mode_property(struct drm_connector *connector,
 int drm_connector_attach_vrr_capable_property(
 		struct drm_connector *connector);
 int drm_mode_create_aspect_ratio_property(struct drm_device *dev);
-int drm_mode_create_colorspace_property(struct drm_connector *connector);
+int drm_mode_create_hdmi_colorspace_property(struct drm_connector *connector);
+int drm_mode_create_dp_colorspace_property(struct drm_connector *connector);
 int drm_mode_create_content_type_property(struct drm_device *dev);
 void drm_hdmi_avi_infoframe_content_type(struct hdmi_avi_infoframe *frame,
 					 const struct drm_connector_state *conn_state);
@@ -1511,8 +1589,13 @@ void drm_connector_set_link_status_property(struct drm_connector *connector,
 					    uint64_t link_status);
 void drm_connector_set_vrr_capable_property(
 		struct drm_connector *connector, bool capable);
-int drm_connector_init_panel_orientation_property(
-	struct drm_connector *connector, int width, int height);
+int drm_connector_set_panel_orientation(
+	struct drm_connector *connector,
+	enum drm_panel_orientation panel_orientation);
+int drm_connector_set_panel_orientation_with_quirk(
+	struct drm_connector *connector,
+	enum drm_panel_orientation panel_orientation,
+	int width, int height);
 int drm_connector_attach_max_bpc_property(struct drm_connector *connector,
 					  int min, int max);
 
@@ -1580,13 +1663,9 @@ bool drm_connector_has_possible_encoder(struct drm_connector *connector,
  * drm_connector_for_each_possible_encoder - iterate connector's possible encoders
  * @connector: &struct drm_connector pointer
  * @encoder: &struct drm_encoder pointer used as cursor
- * @__i: int iteration cursor, for macro-internal use
  */
-#define drm_connector_for_each_possible_encoder(connector, encoder, __i) \
-	for ((__i) = 0; (__i) < ARRAY_SIZE((connector)->encoder_ids) && \
-		     (connector)->encoder_ids[(__i)] != 0; (__i)++) \
-		for_each_if((encoder) = \
-			    drm_encoder_find((connector)->dev, NULL, \
-					     (connector)->encoder_ids[(__i)])) \
+#define drm_connector_for_each_possible_encoder(connector, encoder) \
+	drm_for_each_encoder_mask(encoder, (connector)->dev, \
+				  (connector)->possible_encoders)
 
 #endif

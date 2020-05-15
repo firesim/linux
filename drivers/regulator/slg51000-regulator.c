@@ -198,17 +198,14 @@ static int slg51000_of_parse_cb(struct device_node *np,
 				const struct regulator_desc *desc,
 				struct regulator_config *config)
 {
-	struct slg51000 *chip = config->driver_data;
 	struct gpio_desc *ena_gpiod;
-	enum gpiod_flags gflags = GPIOD_OUT_LOW | GPIOD_FLAGS_BIT_NONEXCLUSIVE;
 
-	ena_gpiod = devm_gpiod_get_from_of_node(chip->dev, np,
-						"enable-gpios", 0,
-						gflags, "gpio-en-ldo");
-	if (!IS_ERR(ena_gpiod)) {
+	ena_gpiod = fwnode_gpiod_get_index(of_fwnode_handle(np), "enable", 0,
+					   GPIOD_OUT_LOW |
+						GPIOD_FLAGS_BIT_NONEXCLUSIVE,
+					   "gpio-en-ldo");
+	if (!IS_ERR(ena_gpiod))
 		config->ena_gpiod = ena_gpiod;
-		devm_gpiod_unhinge(chip->dev, config->ena_gpiod);
-	}
 
 	return 0;
 }
@@ -442,24 +439,24 @@ static void slg51000_clear_fault_log(struct slg51000 *chip)
 		dev_dbg(chip->dev, "Fault log: FLT_POR\n");
 }
 
-static int slg51000_i2c_probe(struct i2c_client *client,
-			      const struct i2c_device_id *id)
+static int slg51000_i2c_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct slg51000 *chip;
-	struct gpio_desc *cs_gpiod = NULL;
+	struct gpio_desc *cs_gpiod;
 	int error, ret;
 
 	chip = devm_kzalloc(dev, sizeof(struct slg51000), GFP_KERNEL);
 	if (!chip)
 		return -ENOMEM;
 
-	cs_gpiod = devm_gpiod_get_from_of_node(dev, dev->of_node,
-					       "dlg,cs-gpios", 0,
-					       GPIOD_OUT_HIGH
-					       | GPIOD_FLAGS_BIT_NONEXCLUSIVE,
-					       "slg51000-cs");
-	if (!IS_ERR(cs_gpiod)) {
+	cs_gpiod = devm_gpiod_get_optional(dev, "dlg,cs",
+					   GPIOD_OUT_HIGH |
+						GPIOD_FLAGS_BIT_NONEXCLUSIVE);
+	if (IS_ERR(cs_gpiod))
+		return PTR_ERR(cs_gpiod);
+
+	if (cs_gpiod) {
 		dev_info(dev, "Found chip selector property\n");
 		chip->cs_gpiod = cs_gpiod;
 	}
@@ -511,7 +508,7 @@ static struct i2c_driver slg51000_regulator_driver = {
 	.driver = {
 		.name = "slg51000-regulator",
 	},
-	.probe = slg51000_i2c_probe,
+	.probe_new = slg51000_i2c_probe,
 	.id_table = slg51000_i2c_id,
 };
 

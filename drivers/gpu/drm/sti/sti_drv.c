@@ -21,8 +21,6 @@
 #include <drm/drm_of.h>
 #include <drm/drm_probe_helper.h>
 
-#include "sti_crtc.h"
-#include "sti_drv.h"
 #include "sti_drv.h"
 #include "sti_plane.h"
 
@@ -141,20 +139,14 @@ static void sti_mode_config_init(struct drm_device *dev)
 DEFINE_DRM_GEM_CMA_FOPS(sti_driver_fops);
 
 static struct drm_driver sti_driver = {
-	.driver_features = DRIVER_MODESET |
-	    DRIVER_GEM | DRIVER_PRIME | DRIVER_ATOMIC,
+	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
 	.gem_free_object_unlocked = drm_gem_cma_free_object,
 	.gem_vm_ops = &drm_gem_cma_vm_ops,
 	.dumb_create = drm_gem_cma_dumb_create,
 	.fops = &sti_driver_fops,
 
-	.enable_vblank = sti_crtc_enable_vblank,
-	.disable_vblank = sti_crtc_disable_vblank,
-
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
 	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
-	.gem_prime_export = drm_gem_prime_export,
-	.gem_prime_import = drm_gem_prime_import,
 	.gem_prime_get_sg_table = drm_gem_cma_prime_get_sg_table,
 	.gem_prime_import_sg_table = drm_gem_cma_prime_import_sg_table,
 	.gem_prime_vmap = drm_gem_cma_prime_vmap,

@@ -110,10 +110,10 @@ static ssize_t cpld_reconfigure(struct device *dev,
 				const char *buf, size_t count)
 {
 	struct kp2000_device *pcard = dev_get_drvdata(dev);
-	long wr_val;
+	unsigned long wr_val;
 	int rv;
 
-	rv = kstrtol(buf, 0, &wr_val);
+	rv = kstrtoul(buf, 0, &wr_val);
 	if (rv < 0)
 		return rv;
 	if (wr_val > 7)
@@ -205,7 +205,7 @@ static void wait_and_read_ssid(struct kp2000_device *pcard)
 	u64 read_val = readq(pcard->sysinfo_regs_base + REG_FPGA_SSID);
 	unsigned long timeout;
 
-	if (read_val & 0x8000000000000000) {
+	if (read_val & 0x8000000000000000UL) {
 		pcard->ssid = read_val;
 		return;
 	}
@@ -213,7 +213,7 @@ static void wait_and_read_ssid(struct kp2000_device *pcard)
 	timeout = jiffies + (HZ * 2);
 	do {
 		read_val = readq(pcard->sysinfo_regs_base + REG_FPGA_SSID);
-		if (read_val & 0x8000000000000000) {
+		if (read_val & 0x8000000000000000UL) {
 			pcard->ssid = read_val;
 			return;
 		}
@@ -241,16 +241,16 @@ static int  read_system_regs(struct kp2000_device *pcard)
 	}
 
 	read_val = readq(pcard->sysinfo_regs_base + REG_CARD_ID_AND_BUILD);
-	pcard->card_id = (read_val & 0xFFFFFFFF00000000) >> 32;
-	pcard->build_version = (read_val & 0x00000000FFFFFFFF) >> 0;
+	pcard->card_id = (read_val & 0xFFFFFFFF00000000UL) >> 32;
+	pcard->build_version = (read_val & 0x00000000FFFFFFFFUL) >> 0;
 
 	read_val = readq(pcard->sysinfo_regs_base + REG_DATE_AND_TIME_STAMPS);
-	pcard->build_datestamp = (read_val & 0xFFFFFFFF00000000) >> 32;
-	pcard->build_timestamp = (read_val & 0x00000000FFFFFFFF) >> 0;
+	pcard->build_datestamp = (read_val & 0xFFFFFFFF00000000UL) >> 32;
+	pcard->build_timestamp = (read_val & 0x00000000FFFFFFFFUL) >> 0;
 
 	read_val = readq(pcard->sysinfo_regs_base + REG_CORE_TABLE_OFFSET);
-	pcard->core_table_length = (read_val & 0xFFFFFFFF00000000) >> 32;
-	pcard->core_table_offset = (read_val & 0x00000000FFFFFFFF) >> 0;
+	pcard->core_table_length = (read_val & 0xFFFFFFFF00000000UL) >> 32;
+	pcard->core_table_offset = (read_val & 0x00000000FFFFFFFFUL) >> 0;
 
 	wait_and_read_ssid(pcard);
 
@@ -338,7 +338,7 @@ static int kp2000_pcie_probe(struct pci_dev *pdev,
 	reg_bar_phys_addr = pci_resource_start(pcard->pdev, REG_BAR);
 	reg_bar_phys_len = pci_resource_len(pcard->pdev, REG_BAR);
 
-	pcard->regs_bar_base = ioremap_nocache(reg_bar_phys_addr, PAGE_SIZE);
+	pcard->regs_bar_base = ioremap(reg_bar_phys_addr, PAGE_SIZE);
 	if (!pcard->regs_bar_base) {
 		dev_err(&pcard->pdev->dev,
 			"probe: REG_BAR could not remap memory to virtual space\n");
@@ -367,7 +367,7 @@ static int kp2000_pcie_probe(struct pci_dev *pdev,
 	dma_bar_phys_addr = pci_resource_start(pcard->pdev, DMA_BAR);
 	dma_bar_phys_len = pci_resource_len(pcard->pdev, DMA_BAR);
 
-	pcard->dma_bar_base = ioremap_nocache(dma_bar_phys_addr,
+	pcard->dma_bar_base = ioremap(dma_bar_phys_addr,
 					      dma_bar_phys_len);
 	if (!pcard->dma_bar_base) {
 		dev_err(&pcard->pdev->dev,
@@ -401,7 +401,7 @@ static int kp2000_pcie_probe(struct pci_dev *pdev,
 		goto err_release_dma;
 
 	// Disable all "user" interrupts because they're not used yet.
-	writeq(0xFFFFFFFFFFFFFFFF,
+	writeq(0xFFFFFFFFFFFFFFFFUL,
 	       pcard->sysinfo_regs_base + REG_INTERRUPT_MASK);
 
 	// let the card master PCIe

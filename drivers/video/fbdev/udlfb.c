@@ -1037,7 +1037,6 @@ static int dlfb_ops_release(struct fb_info *info, int user)
 		fb_deferred_io_cleanup(info);
 		kfree(info->fbdefio);
 		info->fbdefio = NULL;
-		info->fbops->fb_mmap = dlfb_ops_mmap;
 	}
 
 	dev_dbg(info->dev, "release, user=%d count=%d\n", user, dlfb->fb_count);
@@ -1183,7 +1182,7 @@ static int dlfb_ops_blank(int blank_mode, struct fb_info *info)
 	return 0;
 }
 
-static struct fb_ops dlfb_ops = {
+static const struct fb_ops dlfb_ops = {
 	.owner = THIS_MODULE,
 	.fb_read = fb_sys_read,
 	.fb_write = dlfb_ops_write,

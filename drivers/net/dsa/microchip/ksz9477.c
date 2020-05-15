@@ -14,7 +14,6 @@
 #include <net/dsa.h>
 #include <net/switchdev.h>
 
-#include "ksz_priv.h"
 #include "ksz9477_reg.h"
 #include "ksz_common.h"
 
@@ -296,7 +295,8 @@ static void ksz9477_port_init_cnt(struct ksz_device *dev, int port)
 }
 
 static enum dsa_tag_protocol ksz9477_get_tag_protocol(struct dsa_switch *ds,
-						      int port)
+						      int port,
+						      enum dsa_tag_protocol mp)
 {
 	enum dsa_tag_protocol proto = DSA_TAG_PROTO_KSZ9477;
 	struct ksz_device *dev = ds->priv;
@@ -1529,6 +1529,15 @@ static const struct ksz_chip_data ksz9477_switch_chips[] = {
 		.num_statics = 16,
 		.cpu_ports = 0x07,	/* can be configured as cpu port */
 		.port_cnt = 3,		/* total port count */
+	},
+	{
+		.chip_id = 0x00956700,
+		.dev_name = "KSZ9567",
+		.num_vlans = 4096,
+		.num_alus = 4096,
+		.num_statics = 16,
+		.cpu_ports = 0x7F,	/* can be configured as cpu port */
+		.port_cnt = 7,		/* total physical port count */
 	},
 };
 

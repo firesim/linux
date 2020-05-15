@@ -8,7 +8,7 @@
 #define __MSM_GEM_H__
 
 #include <linux/kref.h>
-#include <linux/reservation.h>
+#include <linux/dma-resv.h>
 #include "msm_drv.h"
 
 /* Additional internal-use only BO flags: */
@@ -157,7 +157,17 @@ struct msm_gem_submit {
 			uint32_t handle;
 		};
 		uint64_t iova;
-	} bos[0];
+	} bos[];
 };
+
+/* helper to determine of a buffer in submit should be dumped, used for both
+ * devcoredump and debugfs cmdstream dumping:
+ */
+static inline bool
+should_dump(struct msm_gem_submit *submit, int idx)
+{
+	extern bool rd_full;
+	return rd_full || (submit->bos[idx].flags & MSM_SUBMIT_BO_DUMP);
+}
 
 #endif /* __MSM_GEM_H__ */

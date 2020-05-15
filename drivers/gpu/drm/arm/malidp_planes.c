@@ -7,11 +7,13 @@
  */
 
 #include <linux/iommu.h>
+#include <linux/platform_device.h>
 
-#include <drm/drmP.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_fb_cma_helper.h>
+#include <drm/drm_fourcc.h>
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_plane_helper.h>
@@ -510,7 +512,7 @@ static int malidp_de_plane_check(struct drm_plane *plane,
 	int i, ret;
 	unsigned int block_w, block_h;
 
-	if (!state->crtc || !state->fb)
+	if (!state->crtc || WARN_ON(!state->fb))
 		return 0;
 
 	fb = state->fb;

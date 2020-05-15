@@ -658,10 +658,6 @@ isp_video_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
 	cap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_OUTPUT
 		| V4L2_CAP_STREAMING | V4L2_CAP_DEVICE_CAPS;
 
-	if (video->type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
-		cap->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
-	else
-		cap->device_caps = V4L2_CAP_VIDEO_OUTPUT | V4L2_CAP_STREAMING;
 
 	return 0;
 }
@@ -1024,8 +1020,8 @@ static int isp_video_check_external_subdevs(struct isp_video *video,
 
 	ctrls.count = 1;
 	ctrls.controls = &ctrl;
-
-	ret = v4l2_g_ext_ctrls(pipe->external->ctrl_handler, NULL, &ctrls);
+	ret = v4l2_g_ext_ctrls(pipe->external->ctrl_handler, &video->video,
+			       NULL, &ctrls);
 	if (ret < 0) {
 		dev_warn(isp->dev, "no pixel rate control in subdev %s\n",
 			 pipe->external->name);
@@ -1315,7 +1311,7 @@ static int isp_video_open(struct file *file)
 		goto done;
 	}
 
-	ret = v4l2_pipeline_pm_use(&video->video.entity, 1);
+	ret = v4l2_pipeline_pm_get(&video->video.entity);
 	if (ret < 0) {
 		omap3isp_put(video->isp);
 		goto done;
@@ -1367,7 +1363,7 @@ static int isp_video_release(struct file *file)
 	vb2_queue_release(&handle->queue);
 	mutex_unlock(&video->queue_lock);
 
-	v4l2_pipeline_pm_use(&video->video.entity, 0);
+	v4l2_pipeline_pm_put(&video->video.entity);
 
 	/* Release the file handle. */
 	v4l2_fh_del(vfh);
@@ -1457,9 +1453,16 @@ int omap3isp_video_init(struct isp_video *video, const char *name)
 	video->video.fops = &isp_video_fops;
 	snprintf(video->video.name, sizeof(video->video.name),
 		 "OMAP3 ISP %s %s", name, direction);
-	video->video.vfl_type = VFL_TYPE_GRABBER;
+	video->video.vfl_type = VFL_TYPE_VIDEO;
 	video->video.release = video_device_release_empty;
 	video->video.ioctl_ops = &isp_video_ioctl_ops;
+	if (video->type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
+		video->video.device_caps = V4L2_CAP_VIDEO_CAPTURE
+					 | V4L2_CAP_STREAMING;
+	else
+		video->video.device_caps = V4L2_CAP_VIDEO_OUTPUT
+					 | V4L2_CAP_STREAMING;
+
 	video->pipe.stream_state = ISP_PIPELINE_STREAM_STOPPED;
 
 	video_set_drvdata(&video->video, video);
@@ -1481,7 +1484,7 @@ int omap3isp_video_register(struct isp_video *video, struct v4l2_device *vdev)
 
 	video->video.v4l2_dev = vdev;
 
-	ret = video_register_device(&video->video, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(&video->video, VFL_TYPE_VIDEO, -1);
 	if (ret < 0)
 		dev_err(video->isp->dev,
 			"%s: could not register video device (%d)\n",

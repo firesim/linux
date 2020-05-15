@@ -1163,6 +1163,7 @@ int ath10k_htt_mgmt_tx(struct ath10k_htt *htt, struct sk_buff *msdu)
 	int len = 0;
 	int msdu_id = -1;
 	int res;
+	const u8 *peer_addr;
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)msdu->data;
 
 	len += sizeof(cmd->hdr);
@@ -1178,7 +1179,16 @@ int ath10k_htt_mgmt_tx(struct ath10k_htt *htt, struct sk_buff *msdu)
 	     ieee80211_is_deauth(hdr->frame_control) ||
 	     ieee80211_is_disassoc(hdr->frame_control)) &&
 	     ieee80211_has_protected(hdr->frame_control)) {
-		skb_put(msdu, IEEE80211_CCMP_MIC_LEN);
+		peer_addr = hdr->addr1;
+		if (is_multicast_ether_addr(peer_addr)) {
+			skb_put(msdu, sizeof(struct ieee80211_mmie_16));
+		} else {
+			if (skb_cb->ucast_cipher == WLAN_CIPHER_SUITE_GCMP ||
+			    skb_cb->ucast_cipher == WLAN_CIPHER_SUITE_GCMP_256)
+				skb_put(msdu, IEEE80211_GCMP_MIC_LEN);
+			else
+				skb_put(msdu, IEEE80211_CCMP_MIC_LEN);
+		}
 	}
 
 	txdesc = ath10k_htc_alloc_skb(ar, len);
@@ -1237,6 +1247,7 @@ static int ath10k_htt_tx_hl(struct ath10k_htt *htt, enum ath10k_hw_txrx_mode txm
 	struct ath10k *ar = htt->ar;
 	int res, data_len;
 	struct htt_cmd_hdr *cmd_hdr;
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)msdu->data;
 	struct htt_data_tx_desc *tx_desc;
 	struct ath10k_skb_cb *skb_cb = ATH10K_SKB_CB(msdu);
 	struct sk_buff *tmp_skb;
@@ -1246,6 +1257,13 @@ static int ath10k_htt_tx_hl(struct ath10k_htt *htt, enum ath10k_hw_txrx_mode txm
 	u8 flags0 = 0;
 	u16 flags1 = 0;
 	u16 msdu_id = 0;
+
+	if ((ieee80211_is_action(hdr->frame_control) ||
+	     ieee80211_is_deauth(hdr->frame_control) ||
+	     ieee80211_is_disassoc(hdr->frame_control)) &&
+	     ieee80211_has_protected(hdr->frame_control)) {
+		skb_put(msdu, IEEE80211_CCMP_MIC_LEN);
+	}
 
 	data_len = msdu->len;
 

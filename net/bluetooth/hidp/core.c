@@ -267,7 +267,7 @@ static int hidp_get_raw_report(struct hid_device *hid,
 	set_bit(HIDP_WAITING_FOR_RETURN, &session->flags);
 	data[0] = report_number;
 	ret = hidp_send_ctrl_message(session, report_type, data, 1);
-	if (ret)
+	if (ret < 0)
 		goto err;
 
 	/* Wait for the return of the report. The returned report
@@ -343,7 +343,7 @@ static int hidp_set_raw_report(struct hid_device *hid, unsigned char reportnum,
 	data[0] = reportnum;
 	set_bit(HIDP_WAITING_FOR_SEND_ACK, &session->flags);
 	ret = hidp_send_ctrl_message(session, report_type, data, count);
-	if (ret)
+	if (ret < 0)
 		goto err;
 
 	/* Wait for the ACK from the device. */
@@ -1279,7 +1279,7 @@ static int hidp_session_thread(void *arg)
 	add_wait_queue(sk_sleep(session->intr_sock->sk), &intr_wait);
 	/* This memory barrier is paired with wq_has_sleeper(). See
 	 * sock_poll_wait() for more information why this is needed. */
-	smp_mb();
+	smp_mb__before_atomic();
 
 	/* notify synchronous startup that we're ready */
 	atomic_inc(&session->state);

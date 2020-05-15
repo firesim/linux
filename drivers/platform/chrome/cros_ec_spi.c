@@ -6,13 +6,15 @@
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/mfd/cros_ec.h>
-#include <linux/mfd/cros_ec_commands.h>
 #include <linux/of.h>
+#include <linux/platform_data/cros_ec_commands.h>
+#include <linux/platform_data/cros_ec_proto.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/spi/spi.h>
 #include <uapi/linux/sched/types.h>
+
+#include "cros_ec.h"
 
 /* The header byte, which follows the preamble */
 #define EC_MSG_HEADER			0xec
@@ -125,7 +127,8 @@ static int terminate_request(struct cros_ec_device *ec_dev)
 	 */
 	spi_message_init(&msg);
 	memset(&trans, 0, sizeof(trans));
-	trans.delay_usecs = ec_spi->end_of_msg_delay;
+	trans.delay.value = ec_spi->end_of_msg_delay;
+	trans.delay.unit = SPI_DELAY_UNIT_USECS;
 	spi_message_add_tail(&trans, &msg);
 
 	ret = spi_sync_locked(ec_spi->spi, &msg);
@@ -414,7 +417,8 @@ static int do_cros_ec_pkt_xfer_spi(struct cros_ec_device *ec_dev,
 	spi_message_init(&msg);
 	if (ec_spi->start_of_msg_delay) {
 		memset(&trans_delay, 0, sizeof(trans_delay));
-		trans_delay.delay_usecs = ec_spi->start_of_msg_delay;
+		trans_delay.delay.value = ec_spi->start_of_msg_delay;
+		trans_delay.delay.unit = SPI_DELAY_UNIT_USECS;
 		spi_message_add_tail(&trans_delay, &msg);
 	}
 
@@ -706,7 +710,7 @@ static int cros_ec_spi_devm_high_pri_alloc(struct device *dev,
 					   struct cros_ec_spi *ec_spi)
 {
 	struct sched_param sched_priority = {
-		.sched_priority = MAX_RT_PRIO - 1,
+		.sched_priority = MAX_RT_PRIO / 2,
 	};
 	int err;
 
@@ -785,6 +789,13 @@ static int cros_ec_spi_probe(struct spi_device *spi)
 	return 0;
 }
 
+static int cros_ec_spi_remove(struct spi_device *spi)
+{
+	struct cros_ec_device *ec_dev = spi_get_drvdata(spi);
+
+	return cros_ec_unregister(ec_dev);
+}
+
 #ifdef CONFIG_PM_SLEEP
 static int cros_ec_spi_suspend(struct device *dev)
 {
@@ -823,6 +834,7 @@ static struct spi_driver cros_ec_driver_spi = {
 		.pm	= &cros_ec_spi_pm_ops,
 	},
 	.probe		= cros_ec_spi_probe,
+	.remove		= cros_ec_spi_remove,
 	.id_table	= cros_ec_spi_id,
 };
 

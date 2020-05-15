@@ -40,7 +40,7 @@ struct nfsd_net {
 
 	struct lock_manager nfsd4_manager;
 	bool grace_ended;
-	time_t boot_time;
+	time64_t boot_time;
 
 	/* internal mount of the "nfsd" pseudofilesystem: */
 	struct vfsmount *nfsd_mnt;
@@ -92,8 +92,8 @@ struct nfsd_net {
 	bool in_grace;
 	const struct nfsd4_client_tracking_ops *client_tracking_ops;
 
-	time_t nfsd4_lease;
-	time_t nfsd4_grace;
+	time64_t nfsd4_lease;
+	time64_t nfsd4_grace;
 	bool somebody_reclaimed;
 
 	bool track_reclaim_completes;
@@ -104,6 +104,7 @@ struct nfsd_net {
 
 	/* Time of server startup */
 	struct timespec64 nfssvc_boot;
+	seqlock_t boot_lock;
 
 	/*
 	 * Max number of connections this nfsd container will allow. Defaults
@@ -171,6 +172,8 @@ struct nfsd_net {
 	unsigned int             longest_chain_cachesize;
 
 	struct shrinker		nfsd_reply_cache_shrinker;
+	/* utsname taken from the the process that starts the server */
+	char			nfsd_name[UNX_MAXNODENAME+1];
 };
 
 /* Simple check to find out if a given net was properly initialized */
@@ -179,4 +182,7 @@ struct nfsd_net {
 extern void nfsd_netns_free_versions(struct nfsd_net *nn);
 
 extern unsigned int nfsd_net_id;
+
+void nfsd_copy_boot_verifier(__be32 verf[2], struct nfsd_net *nn);
+void nfsd_reset_boot_verifier(struct nfsd_net *nn);
 #endif /* __NFSD_NETNS_H__ */

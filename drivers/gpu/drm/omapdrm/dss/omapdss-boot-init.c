@@ -174,41 +174,38 @@ static const struct of_device_id omapdss_of_match[] __initconst = {
 };
 
 static const struct of_device_id omapdss_of_fixups_whitelist[] __initconst = {
-	{ .compatible = "composite-video-connector" },
-	{ .compatible = "hdmi-connector" },
-	{ .compatible = "lgphilips,lb035q02" },
-	{ .compatible = "nec,nl8048hl11" },
 	{ .compatible = "panel-dsi-cm" },
-	{ .compatible = "sharp,ls037v7dw01" },
-	{ .compatible = "sony,acx565akm" },
-	{ .compatible = "svideo-connector" },
-	{ .compatible = "ti,opa362" },
-	{ .compatible = "ti,tpd12s015" },
-	{ .compatible = "toppoly,td028ttec1" },
-	{ .compatible = "tpo,td028ttec1" },
-	{ .compatible = "tpo,td043mtea1" },
 	{},
 };
 
+static void __init omapdss_find_children(struct device_node *np)
+{
+	struct device_node *child;
+
+	for_each_available_child_of_node(np, child) {
+		if (!of_find_property(child, "compatible", NULL))
+			continue;
+
+		omapdss_walk_device(child, true);
+
+		if (of_device_is_compatible(child, "ti,sysc"))
+			omapdss_find_children(child);
+	}
+}
+
 static int __init omapdss_boot_init(void)
 {
-	struct device_node *dss, *child;
+	struct device_node *dss;
 
 	INIT_LIST_HEAD(&dss_conv_list);
 
 	dss = of_find_matching_node(NULL, omapdss_of_match);
 
 	if (dss == NULL || !of_device_is_available(dss))
-		return 0;
+		goto put_node;
 
 	omapdss_walk_device(dss, true);
-
-	for_each_available_child_of_node(dss, child) {
-		if (!of_find_property(child, "compatible", NULL))
-			continue;
-
-		omapdss_walk_device(child, true);
-	}
+	omapdss_find_children(dss);
 
 	while (!list_empty(&dss_conv_list)) {
 		struct dss_conv_node *n;
@@ -224,6 +221,8 @@ static int __init omapdss_boot_init(void)
 		kfree(n);
 	}
 
+put_node:
+	of_node_put(dss);
 	return 0;
 }
 

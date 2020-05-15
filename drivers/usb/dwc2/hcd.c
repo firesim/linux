@@ -2824,7 +2824,7 @@ static int dwc2_queue_transaction(struct dwc2_hsotg *hsotg,
 		list_move_tail(&chan->split_order_list_entry,
 			       &hsotg->split_order);
 
-	if (hsotg->params.host_dma) {
+	if (hsotg->params.host_dma && chan->qh) {
 		if (hsotg->params.dma_desc_enable) {
 			if (!chan->xfer_started ||
 			    chan->ep_type == USB_ENDPOINT_XFER_ISOC) {
@@ -5062,12 +5062,12 @@ int dwc2_hcd_init(struct dwc2_hsotg *hsotg)
 		dwc2_hc_driver.reset_device = dwc2_reset_device;
 	}
 
+	if (hsotg->params.host_dma)
+		dwc2_hc_driver.flags |= HCD_DMA;
+
 	hcd = usb_create_hcd(&dwc2_hc_driver, hsotg->dev, dev_name(hsotg->dev));
 	if (!hcd)
 		goto error1;
-
-	if (!hsotg->params.host_dma)
-		hcd->self.uses_dma = 0;
 
 	hcd->has_tt = 1;
 

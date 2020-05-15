@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2007-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2007-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner, Simon Wunderlich
  */
@@ -17,6 +17,7 @@
 #include <linux/if.h>
 #include <linux/if_ether.h>
 #include <linux/kref.h>
+#include <linux/mutex.h>
 #include <linux/netdevice.h>
 #include <linux/netlink.h>
 #include <linux/sched.h> /* for linux/wait.h */
@@ -81,6 +82,9 @@ struct batadv_hard_iface_bat_iv {
 
 	/** @ogm_seqno: OGM sequence number - used to identify each OGM */
 	atomic_t ogm_seqno;
+
+	/** @ogm_buff_mutex: lock protecting ogm_buff and ogm_buff_len */
+	struct mutex ogm_buff_mutex;
 };
 
 /**
@@ -116,6 +120,15 @@ struct batadv_hard_iface_bat_v {
 
 	/** @elp_wq: workqueue used to schedule ELP transmissions */
 	struct delayed_work elp_wq;
+
+	/** @aggr_wq: workqueue used to transmit queued OGM packets */
+	struct delayed_work aggr_wq;
+
+	/** @aggr_list: queue for to be aggregated OGM packets */
+	struct sk_buff_head aggr_list;
+
+	/** @aggr_len: size of the OGM aggregate (excluding ethernet header) */
+	unsigned int aggr_len;
 
 	/**
 	 * @throughput_override: throughput override to disable link
@@ -444,7 +457,7 @@ struct batadv_orig_node {
 	/**
 	 * @tt_lock: prevents from updating the table while reading it. Table
 	 *  update is made up by two operations (data structure update and
-	 *  metdata -CRC/TTVN-recalculation) and they have to be executed
+	 *  metadata -CRC/TTVN-recalculation) and they have to be executed
 	 *  atomically in order to avoid another thread to read the
 	 *  table/metadata between those.
 	 */
@@ -998,7 +1011,7 @@ struct batadv_priv_tt {
 	/**
 	 * @commit_lock: prevents from executing a local TT commit while reading
 	 *  the local table. The local TT commit is made up by two operations
-	 *  (data structure update and metdata -CRC/TTVN- recalculation) and
+	 *  (data structure update and metadata -CRC/TTVN- recalculation) and
 	 *  they have to be executed atomically in order to avoid another thread
 	 *  to read the table/metadata between those.
 	 */
@@ -1526,6 +1539,9 @@ struct batadv_priv_bat_v {
 
 	/** @ogm_seqno: OGM sequence number - used to identify each OGM */
 	atomic_t ogm_seqno;
+
+	/** @ogm_buff_mutex: lock protecting ogm_buff and ogm_buff_len */
+	struct mutex ogm_buff_mutex;
 
 	/** @ogm_wq: workqueue used to schedule OGM transmissions */
 	struct delayed_work ogm_wq;

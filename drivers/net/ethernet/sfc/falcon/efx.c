@@ -1265,7 +1265,7 @@ static int ef4_init_io(struct ef4_nic *efx)
 		rc = -EIO;
 		goto fail3;
 	}
-	efx->membase = ioremap_nocache(efx->membase_phys, mem_map_size);
+	efx->membase = ioremap(efx->membase_phys, mem_map_size);
 	if (!efx->membase) {
 		netif_err(efx, probe, efx->net_dev,
 			  "could not map memory BAR at %llx+%x\n",
@@ -2108,7 +2108,7 @@ static void ef4_net_stats(struct net_device *net_dev,
 }
 
 /* Context: netif_tx_lock held, BHs disabled. */
-static void ef4_watchdog(struct net_device *net_dev)
+static void ef4_watchdog(struct net_device *net_dev, unsigned int txqueue)
 {
 	struct ef4_nic *efx = netdev_priv(net_dev);
 
@@ -2256,7 +2256,7 @@ static struct notifier_block ef4_netdev_notifier = {
 static ssize_t
 show_phy_type(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	struct ef4_nic *efx = pci_get_drvdata(to_pci_dev(dev));
+	struct ef4_nic *efx = dev_get_drvdata(dev);
 	return sprintf(buf, "%d\n", efx->phy_type);
 }
 static DEVICE_ATTR(phy_type, 0444, show_phy_type, NULL);
@@ -2999,7 +2999,7 @@ static int ef4_pci_probe(struct pci_dev *pci_dev,
 
 static int ef4_pm_freeze(struct device *dev)
 {
-	struct ef4_nic *efx = pci_get_drvdata(to_pci_dev(dev));
+	struct ef4_nic *efx = dev_get_drvdata(dev);
 
 	rtnl_lock();
 
@@ -3020,7 +3020,7 @@ static int ef4_pm_freeze(struct device *dev)
 static int ef4_pm_thaw(struct device *dev)
 {
 	int rc;
-	struct ef4_nic *efx = pci_get_drvdata(to_pci_dev(dev));
+	struct ef4_nic *efx = dev_get_drvdata(dev);
 
 	rtnl_lock();
 

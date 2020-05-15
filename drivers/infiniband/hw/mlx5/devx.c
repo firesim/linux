@@ -30,7 +30,7 @@ enum devx_obj_flags {
 struct devx_async_data {
 	struct mlx5_ib_dev *mdev;
 	struct list_head list;
-	struct ib_uobject *fd_uobj;
+	struct devx_async_cmd_event_file *ev_file;
 	struct mlx5_async_work cb_work;
 	u16 cmd_out_len;
 	/* must be last field in this structure */
@@ -72,7 +72,6 @@ struct devx_event_subscription {
 	struct rcu_head	rcu;
 	u64 cookie;
 	struct devx_async_event_file *ev_file;
-	struct file *filp; /* Upon hot unplug we need a direct access to */
 	struct eventfd_ctx *eventfd;
 };
 
@@ -100,6 +99,7 @@ struct devx_obj {
 		struct mlx5_ib_devx_mr	devx_mr;
 		struct mlx5_core_dct	core_dct;
 		struct mlx5_core_cq	core_cq;
+		u32			flow_counter_bulk_size;
 	};
 	struct list_head event_sub; /* holds devx_event_subscription entries */
 };
@@ -192,15 +192,20 @@ bool mlx5_ib_devx_is_flow_dest(void *obj, int *dest_id, int *dest_type)
 	}
 }
 
-bool mlx5_ib_devx_is_flow_counter(void *obj, u32 *counter_id)
+bool mlx5_ib_devx_is_flow_counter(void *obj, u32 offset, u32 *counter_id)
 {
 	struct devx_obj *devx_obj = obj;
 	u16 opcode = MLX5_GET(general_obj_in_cmd_hdr, devx_obj->dinbox, opcode);
 
 	if (opcode == MLX5_CMD_OP_DEALLOC_FLOW_COUNTER) {
+
+		if (offset && offset >= devx_obj->flow_counter_bulk_size)
+			return false;
+
 		*counter_id = MLX5_GET(dealloc_flow_counter_in,
 				       devx_obj->dinbox,
 				       flow_counter_id);
+		*counter_id += offset;
 		return true;
 	}
 
@@ -233,6 +238,8 @@ static bool is_legacy_obj_event_num(u16 event_num)
 	case MLX5_EVENT_TYPE_SRQ_CATAS_ERROR:
 	case MLX5_EVENT_TYPE_DCT_DRAINED:
 	case MLX5_EVENT_TYPE_COMP:
+	case MLX5_EVENT_TYPE_DCT_KEY_VIOLATION:
+	case MLX5_EVENT_TYPE_XRQ_ERROR:
 		return true;
 	default:
 		return false;
@@ -315,8 +322,10 @@ static u16 get_event_obj_type(unsigned long event_type, struct mlx5_eqe *eqe)
 	case MLX5_EVENT_TYPE_SRQ_CATAS_ERROR:
 		return eqe->data.qp_srq.type;
 	case MLX5_EVENT_TYPE_CQ_ERROR:
+	case MLX5_EVENT_TYPE_XRQ_ERROR:
 		return 0;
 	case MLX5_EVENT_TYPE_DCT_DRAINED:
+	case MLX5_EVENT_TYPE_DCT_KEY_VIOLATION:
 		return MLX5_EVENT_QUEUE_TYPE_DCT;
 	default:
 		return MLX5_GET(affiliated_event_header, &eqe->data, obj_type);
@@ -542,6 +551,8 @@ static u64 devx_get_obj_id(const void *in)
 		break;
 	case MLX5_CMD_OP_ARM_XRQ:
 	case MLX5_CMD_OP_SET_XRQ_DC_PARAMS_ENTRY:
+	case MLX5_CMD_OP_RELEASE_XRQ_ERROR:
+	case MLX5_CMD_OP_MODIFY_XRQ:
 		obj_id = get_enc_obj_id(MLX5_CMD_OP_CREATE_XRQ,
 					MLX5_GET(arm_xrq_in, in, xrqn));
 		break;
@@ -776,6 +787,14 @@ static bool devx_is_obj_create_cmd(const void *in, u16 *opcode)
 			return true;
 		return false;
 	}
+	case MLX5_CMD_OP_CREATE_PSV:
+	{
+		u8 num_psv = MLX5_GET(create_psv_in, in, num_psv);
+
+		if (num_psv == 1)
+			return true;
+		return false;
+	}
 	default:
 		return false;
 	}
@@ -810,6 +829,8 @@ static bool devx_is_obj_modify_cmd(const void *in)
 	case MLX5_CMD_OP_ARM_DCT_FOR_KEY_VIOLATION:
 	case MLX5_CMD_OP_ARM_XRQ:
 	case MLX5_CMD_OP_SET_XRQ_DC_PARAMS_ENTRY:
+	case MLX5_CMD_OP_RELEASE_XRQ_ERROR:
+	case MLX5_CMD_OP_MODIFY_XRQ:
 		return true;
 	case MLX5_CMD_OP_SET_FLOW_TABLE_ENTRY:
 	{
@@ -922,6 +943,7 @@ static bool devx_is_general_cmd(void *in, struct mlx5_ib_dev *dev)
 	case MLX5_CMD_OP_QUERY_CONG_STATUS:
 	case MLX5_CMD_OP_QUERY_CONG_PARAMS:
 	case MLX5_CMD_OP_QUERY_CONG_STATISTICS:
+	case MLX5_CMD_OP_QUERY_LAG:
 		return true;
 	default:
 		return false;
@@ -1215,6 +1237,12 @@ static void devx_obj_build_destroy_cmd(void *in, void *out, void *din,
 	case MLX5_CMD_OP_ALLOC_XRCD:
 		MLX5_SET(general_obj_in_cmd_hdr, din, opcode, MLX5_CMD_OP_DEALLOC_XRCD);
 		break;
+	case MLX5_CMD_OP_CREATE_PSV:
+		MLX5_SET(general_obj_in_cmd_hdr, din, opcode,
+			 MLX5_CMD_OP_DESTROY_PSV);
+		MLX5_SET(destroy_psv_in, din, psvn,
+			 MLX5_GET(create_psv_out, out, psv0_index));
+		break;
 	default:
 		/* The entry must match to one of the devx_is_obj_create_cmd */
 		WARN_ON(true);
@@ -1242,8 +1270,8 @@ static int devx_handle_mkey_indirect(struct devx_obj *obj,
 	mkey->pd = MLX5_GET(mkc, mkc, pd);
 	devx_mr->ndescs = MLX5_GET(mkc, mkc, translations_octword_size);
 
-	return xa_err(xa_store(&dev->mdev->priv.mkey_table,
-			       mlx5_base_mkey(mkey->key), mkey, GFP_KERNEL));
+	return xa_err(xa_store(&dev->odp_mkeys, mlx5_base_mkey(mkey->key), mkey,
+			       GFP_KERNEL));
 }
 
 static int devx_handle_mkey_create(struct mlx5_ib_dev *dev,
@@ -1273,29 +1301,6 @@ static int devx_handle_mkey_create(struct mlx5_ib_dev *dev,
 
 	MLX5_SET(create_mkey_in, in, mkey_umem_valid, 1);
 	return 0;
-}
-
-static void devx_free_indirect_mkey(struct rcu_head *rcu)
-{
-	kfree(container_of(rcu, struct devx_obj, devx_mr.rcu));
-}
-
-/* This function to delete from the radix tree needs to be called before
- * destroying the underlying mkey. Otherwise a race might occur in case that
- * other thread will get the same mkey before this one will be deleted,
- * in that case it will fail via inserting to the tree its own data.
- *
- * Note:
- * An error in the destroy is not expected unless there is some other indirect
- * mkey which points to this one. In a kernel cleanup flow it will be just
- * destroyed in the iterative destruction call. In a user flow, in case
- * the application didn't close in the expected order it's its own problem,
- * the mkey won't be part of the tree, in both cases the kernel is safe.
- */
-static void devx_cleanup_mkey(struct devx_obj *obj)
-{
-	xa_erase(&obj->ib_dev->mdev->priv.mkey_table,
-		 mlx5_base_mkey(obj->devx_mr.mmkey.key));
 }
 
 static void devx_cleanup_subscription(struct mlx5_ib_dev *dev,
@@ -1339,8 +1344,16 @@ static int devx_obj_cleanup(struct ib_uobject *uobject,
 	int ret;
 
 	dev = mlx5_udata_to_mdev(&attrs->driver_udata);
-	if (obj->flags & DEVX_OBJ_FLAGS_INDIRECT_MKEY)
-		devx_cleanup_mkey(obj);
+	if (obj->flags & DEVX_OBJ_FLAGS_INDIRECT_MKEY) {
+		/*
+		 * The pagefault_single_data_segment() does commands against
+		 * the mmkey, we must wait for that to stop before freeing the
+		 * mkey, as another allocation could get the same mkey #.
+		 */
+		xa_erase(&obj->ib_dev->odp_mkeys,
+			 mlx5_base_mkey(obj->devx_mr.mmkey.key));
+		synchronize_srcu(&dev->odp_srcu);
+	}
 
 	if (obj->flags & DEVX_OBJ_FLAGS_DCT)
 		ret = mlx5_core_destroy_dct(obj->ib_dev->mdev, &obj->core_dct);
@@ -1358,12 +1371,6 @@ static int devx_obj_cleanup(struct ib_uobject *uobject,
 	list_for_each_entry_safe(sub_entry, tmp, &obj->event_sub, obj_list)
 		devx_cleanup_subscription(dev, sub_entry);
 	mutex_unlock(&devx_event_table->event_xa_lock);
-
-	if (obj->flags & DEVX_OBJ_FLAGS_INDIRECT_MKEY) {
-		call_srcu(&dev->mr_srcu, &obj->devx_mr.rcu,
-			  devx_free_indirect_mkey);
-		return ret;
-	}
 
 	kfree(obj);
 	return ret;
@@ -1461,6 +1468,13 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_CREATE)(
 	if (err)
 		goto obj_free;
 
+	if (opcode == MLX5_CMD_OP_ALLOC_FLOW_COUNTER) {
+		u8 bulk = MLX5_GET(alloc_flow_counter_in,
+				   cmd_in,
+				   flow_counter_bulk);
+		obj->flow_counter_bulk_size = 128UL * bulk;
+	}
+
 	uobj->object = obj;
 	INIT_LIST_HEAD(&obj->event_sub);
 	obj->ib_dev = dev;
@@ -1468,26 +1482,21 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_CREATE)(
 				   &obj_id);
 	WARN_ON(obj->dinlen > MLX5_MAX_DESTROY_INBOX_SIZE_DW * sizeof(u32));
 
+	err = uverbs_copy_to(attrs, MLX5_IB_ATTR_DEVX_OBJ_CREATE_CMD_OUT, cmd_out, cmd_out_len);
+	if (err)
+		goto obj_destroy;
+
+	if (opcode == MLX5_CMD_OP_CREATE_GENERAL_OBJECT)
+		obj_type = MLX5_GET(general_obj_in_cmd_hdr, cmd_in, obj_type);
+	obj->obj_id = get_enc_obj_id(opcode | obj_type << 16, obj_id);
+
 	if (obj->flags & DEVX_OBJ_FLAGS_INDIRECT_MKEY) {
 		err = devx_handle_mkey_indirect(obj, dev, cmd_in, cmd_out);
 		if (err)
 			goto obj_destroy;
 	}
-
-	err = uverbs_copy_to(attrs, MLX5_IB_ATTR_DEVX_OBJ_CREATE_CMD_OUT, cmd_out, cmd_out_len);
-	if (err)
-		goto err_copy;
-
-	if (opcode == MLX5_CMD_OP_CREATE_GENERAL_OBJECT)
-		obj_type = MLX5_GET(general_obj_in_cmd_hdr, cmd_in, obj_type);
-
-	obj->obj_id = get_enc_obj_id(opcode | obj_type << 16, obj_id);
-
 	return 0;
 
-err_copy:
-	if (obj->flags & DEVX_OBJ_FLAGS_INDIRECT_MKEY)
-		devx_cleanup_mkey(obj);
 obj_destroy:
 	if (obj->flags & DEVX_OBJ_FLAGS_DCT)
 		mlx5_core_destroy_dct(obj->ib_dev->mdev, &obj->core_dct);
@@ -1664,21 +1673,20 @@ static void devx_query_callback(int status, struct mlx5_async_work *context)
 {
 	struct devx_async_data *async_data =
 		container_of(context, struct devx_async_data, cb_work);
-	struct ib_uobject *fd_uobj = async_data->fd_uobj;
-	struct devx_async_cmd_event_file *ev_file;
-	struct devx_async_event_queue *ev_queue;
+	struct devx_async_cmd_event_file *ev_file = async_data->ev_file;
+	struct devx_async_event_queue *ev_queue = &ev_file->ev_queue;
 	unsigned long flags;
 
-	ev_file = container_of(fd_uobj, struct devx_async_cmd_event_file,
-			       uobj);
-	ev_queue = &ev_file->ev_queue;
-
+	/*
+	 * Note that if the struct devx_async_cmd_event_file uobj begins to be
+	 * destroyed it will block at mlx5_cmd_cleanup_async_ctx() until this
+	 * routine returns, ensuring that it always remains valid here.
+	 */
 	spin_lock_irqsave(&ev_queue->lock, flags);
 	list_add_tail(&async_data->list, &ev_queue->event_list);
 	spin_unlock_irqrestore(&ev_queue->lock, flags);
 
 	wake_up_interruptible(&ev_queue->poll_wait);
-	fput(fd_uobj->object);
 }
 
 #define MAX_ASYNC_BYTES_IN_USE (1024 * 1024) /* 1MB */
@@ -1747,9 +1755,8 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_ASYNC_QUERY)(
 
 	async_data->cmd_out_len = cmd_out_len;
 	async_data->mdev = mdev;
-	async_data->fd_uobj = fd_uobj;
+	async_data->ev_file = ev_file;
 
-	get_file(fd_uobj->object);
 	MLX5_SET(general_obj_in_cmd_hdr, cmd_in, uid, uid);
 	err = mlx5_cmd_exec_cb(&ev_file->async_ctx, cmd_in,
 		    uverbs_attr_get_len(attrs,
@@ -1759,12 +1766,10 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_ASYNC_QUERY)(
 		    devx_query_callback, &async_data->cb_work);
 
 	if (err)
-		goto cb_err;
+		goto free_async;
 
 	return 0;
 
-cb_err:
-	fput(fd_uobj->object);
 free_async:
 	kvfree(async_data);
 sub_bytes:
@@ -2022,6 +2027,7 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_SUBSCRIBE_EVENT)(
 			goto err;
 
 		list_add_tail(&event_sub->event_list, &sub_list);
+		uverbs_uobject_get(&ev_file->uobj);
 		if (use_eventfd) {
 			event_sub->eventfd =
 				eventfd_ctx_fdget(redirect_fd);
@@ -2035,7 +2041,6 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_SUBSCRIBE_EVENT)(
 
 		event_sub->cookie = cookie;
 		event_sub->ev_file = ev_file;
-		event_sub->filp = fd_uobj->object;
 		/* May be needed upon cleanup the devx object/subscription */
 		event_sub->xa_key_level1 = key_level1;
 		event_sub->xa_key_level2 = obj_id;
@@ -2089,7 +2094,7 @@ err:
 
 		if (event_sub->eventfd)
 			eventfd_ctx_put(event_sub->eventfd);
-
+		uverbs_uobject_put(&event_sub->ev_file->uobj);
 		kfree(event_sub);
 	}
 
@@ -2124,7 +2129,7 @@ static int devx_umem_get(struct mlx5_ib_dev *dev, struct ib_ucontext *ucontext,
 	if (err)
 		return err;
 
-	obj->umem = ib_umem_get(&attrs->driver_udata, addr, size, access, 0);
+	obj->umem = ib_umem_get(&dev->ib_dev, addr, size, access);
 	if (IS_ERR(obj->umem))
 		return PTR_ERR(obj->umem);
 
@@ -2285,7 +2290,11 @@ static u32 devx_get_obj_id_from_event(unsigned long event_type, void *data)
 	case MLX5_EVENT_TYPE_WQ_ACCESS_ERROR:
 		obj_id = be32_to_cpu(eqe->data.qp_srq.qp_srq_n) & 0xffffff;
 		break;
+	case MLX5_EVENT_TYPE_XRQ_ERROR:
+		obj_id = be32_to_cpu(eqe->data.xrq_err.type_xrqn) & 0xffffff;
+		break;
 	case MLX5_EVENT_TYPE_DCT_DRAINED:
+	case MLX5_EVENT_TYPE_DCT_KEY_VIOLATION:
 		obj_id = be32_to_cpu(eqe->data.dct.dctn) & 0xffffff;
 		break;
 	case MLX5_EVENT_TYPE_CQ_ERROR:
@@ -2310,7 +2319,8 @@ static int deliver_event(struct devx_event_subscription *event_sub,
 
 	if (ev_file->omit_data) {
 		spin_lock_irqsave(&ev_file->lock, flags);
-		if (!list_empty(&event_sub->event_list)) {
+		if (!list_empty(&event_sub->event_list) ||
+		    ev_file->is_destroyed) {
 			spin_unlock_irqrestore(&ev_file->lock, flags);
 			return 0;
 		}
@@ -2334,7 +2344,10 @@ static int deliver_event(struct devx_event_subscription *event_sub,
 	memcpy(event_data->hdr.out_data, data, sizeof(struct mlx5_eqe));
 
 	spin_lock_irqsave(&ev_file->lock, flags);
-	list_add_tail(&event_data->list, &ev_file->event_list);
+	if (!ev_file->is_destroyed)
+		list_add_tail(&event_data->list, &ev_file->event_list);
+	else
+		kfree(event_data);
 	spin_unlock_irqrestore(&ev_file->lock, flags);
 	wake_up_interruptible(&ev_file->poll_wait);
 
@@ -2347,17 +2360,10 @@ static void dispatch_event_fd(struct list_head *fd_list,
 	struct devx_event_subscription *item;
 
 	list_for_each_entry_rcu(item, fd_list, xa_list) {
-		if (!get_file_rcu(item->filp))
-			continue;
-
-		if (item->eventfd) {
+		if (item->eventfd)
 			eventfd_signal(item->eventfd, 1);
-			fput(item->filp);
-			continue;
-		}
-
-		deliver_event(item, data);
-		fput(item->filp);
+		else
+			deliver_event(item, data);
 	}
 }
 
@@ -2465,11 +2471,11 @@ static ssize_t devx_async_cmd_event_read(struct file *filp, char __user *buf,
 			return -ERESTARTSYS;
 		}
 
-		if (list_empty(&ev_queue->event_list) &&
-		    ev_queue->is_destroyed)
-			return -EIO;
-
 		spin_lock_irq(&ev_queue->lock);
+		if (ev_queue->is_destroyed) {
+			spin_unlock_irq(&ev_queue->lock);
+			return -EIO;
+		}
 	}
 
 	event = list_entry(ev_queue->event_list.next,
@@ -2495,23 +2501,6 @@ static ssize_t devx_async_cmd_event_read(struct file *filp, char __user *buf,
 	return ret;
 }
 
-static int devx_async_cmd_event_close(struct inode *inode, struct file *filp)
-{
-	struct ib_uobject *uobj = filp->private_data;
-	struct devx_async_cmd_event_file *comp_ev_file = container_of(
-		uobj, struct devx_async_cmd_event_file, uobj);
-	struct devx_async_data *entry, *tmp;
-
-	spin_lock_irq(&comp_ev_file->ev_queue.lock);
-	list_for_each_entry_safe(entry, tmp,
-				 &comp_ev_file->ev_queue.event_list, list)
-		kvfree(entry);
-	spin_unlock_irq(&comp_ev_file->ev_queue.lock);
-
-	uverbs_close_fd(filp);
-	return 0;
-}
-
 static __poll_t devx_async_cmd_event_poll(struct file *filp,
 					      struct poll_table_struct *wait)
 {
@@ -2535,7 +2524,7 @@ static const struct file_operations devx_async_cmd_event_fops = {
 	.owner	 = THIS_MODULE,
 	.read	 = devx_async_cmd_event_read,
 	.poll    = devx_async_cmd_event_poll,
-	.release = devx_async_cmd_event_close,
+	.release = uverbs_uobject_fd_release,
 	.llseek	 = no_llseek,
 };
 
@@ -2560,10 +2549,6 @@ static ssize_t devx_async_event_read(struct file *filp, char __user *buf,
 		return -EOVERFLOW;
 	}
 
-	if (ev_file->is_destroyed) {
-		spin_unlock_irq(&ev_file->lock);
-		return -EIO;
-	}
 
 	while (list_empty(&ev_file->event_list)) {
 		spin_unlock_irq(&ev_file->lock);
@@ -2639,81 +2624,96 @@ static __poll_t devx_async_event_poll(struct file *filp,
 	return pollflags;
 }
 
-static int devx_async_event_close(struct inode *inode, struct file *filp)
+static void devx_free_subscription(struct rcu_head *rcu)
 {
-	struct devx_async_event_file *ev_file = filp->private_data;
-	struct devx_event_subscription *event_sub, *event_sub_tmp;
-	struct devx_async_event_data *entry, *tmp;
-	struct mlx5_ib_dev *dev = ev_file->dev;
+	struct devx_event_subscription *event_sub =
+		container_of(rcu, struct devx_event_subscription, rcu);
 
-	mutex_lock(&dev->devx_event_table.event_xa_lock);
-	/* delete the subscriptions which are related to this FD */
-	list_for_each_entry_safe(event_sub, event_sub_tmp,
-				 &ev_file->subscribed_events_list, file_list) {
-		devx_cleanup_subscription(dev, event_sub);
-		if (event_sub->eventfd)
-			eventfd_ctx_put(event_sub->eventfd);
-
-		list_del_rcu(&event_sub->file_list);
-		/* subscription may not be used by the read API any more */
-		kfree_rcu(event_sub, rcu);
-	}
-
-	mutex_unlock(&dev->devx_event_table.event_xa_lock);
-
-	/* free the pending events allocation */
-	if (!ev_file->omit_data) {
-		spin_lock_irq(&ev_file->lock);
-		list_for_each_entry_safe(entry, tmp,
-					 &ev_file->event_list, list)
-			kfree(entry); /* read can't come any more */
-		spin_unlock_irq(&ev_file->lock);
-	}
-
-	uverbs_close_fd(filp);
-	put_device(&dev->ib_dev.dev);
-	return 0;
+	if (event_sub->eventfd)
+		eventfd_ctx_put(event_sub->eventfd);
+	uverbs_uobject_put(&event_sub->ev_file->uobj);
+	kfree(event_sub);
 }
 
 static const struct file_operations devx_async_event_fops = {
 	.owner	 = THIS_MODULE,
 	.read	 = devx_async_event_read,
 	.poll    = devx_async_event_poll,
-	.release = devx_async_event_close,
+	.release = uverbs_uobject_fd_release,
 	.llseek	 = no_llseek,
 };
 
-static int devx_hot_unplug_async_cmd_event_file(struct ib_uobject *uobj,
-						   enum rdma_remove_reason why)
+static int devx_async_cmd_event_destroy_uobj(struct ib_uobject *uobj,
+					     enum rdma_remove_reason why)
 {
 	struct devx_async_cmd_event_file *comp_ev_file =
 		container_of(uobj, struct devx_async_cmd_event_file,
 			     uobj);
 	struct devx_async_event_queue *ev_queue = &comp_ev_file->ev_queue;
+	struct devx_async_data *entry, *tmp;
 
 	spin_lock_irq(&ev_queue->lock);
 	ev_queue->is_destroyed = 1;
 	spin_unlock_irq(&ev_queue->lock);
-
-	if (why == RDMA_REMOVE_DRIVER_REMOVE)
-		wake_up_interruptible(&ev_queue->poll_wait);
+	wake_up_interruptible(&ev_queue->poll_wait);
 
 	mlx5_cmd_cleanup_async_ctx(&comp_ev_file->async_ctx);
+
+	spin_lock_irq(&comp_ev_file->ev_queue.lock);
+	list_for_each_entry_safe(entry, tmp,
+				 &comp_ev_file->ev_queue.event_list, list) {
+		list_del(&entry->list);
+		kvfree(entry);
+	}
+	spin_unlock_irq(&comp_ev_file->ev_queue.lock);
 	return 0;
 };
 
-static int devx_hot_unplug_async_event_file(struct ib_uobject *uobj,
-					    enum rdma_remove_reason why)
+static int devx_async_event_destroy_uobj(struct ib_uobject *uobj,
+					 enum rdma_remove_reason why)
 {
 	struct devx_async_event_file *ev_file =
 		container_of(uobj, struct devx_async_event_file,
 			     uobj);
+	struct devx_event_subscription *event_sub, *event_sub_tmp;
+	struct mlx5_ib_dev *dev = ev_file->dev;
 
 	spin_lock_irq(&ev_file->lock);
 	ev_file->is_destroyed = 1;
-	spin_unlock_irq(&ev_file->lock);
 
+	/* free the pending events allocation */
+	if (ev_file->omit_data) {
+		struct devx_event_subscription *event_sub, *tmp;
+
+		list_for_each_entry_safe(event_sub, tmp, &ev_file->event_list,
+					 event_list)
+			list_del_init(&event_sub->event_list);
+
+	} else {
+		struct devx_async_event_data *entry, *tmp;
+
+		list_for_each_entry_safe(entry, tmp, &ev_file->event_list,
+					 list) {
+			list_del(&entry->list);
+			kfree(entry);
+		}
+	}
+
+	spin_unlock_irq(&ev_file->lock);
 	wake_up_interruptible(&ev_file->poll_wait);
+
+	mutex_lock(&dev->devx_event_table.event_xa_lock);
+	/* delete the subscriptions which are related to this FD */
+	list_for_each_entry_safe(event_sub, event_sub_tmp,
+				 &ev_file->subscribed_events_list, file_list) {
+		devx_cleanup_subscription(dev, event_sub);
+		list_del_rcu(&event_sub->file_list);
+		/* subscription may not be used by the read API any more */
+		call_rcu(&event_sub->rcu, devx_free_subscription);
+	}
+	mutex_unlock(&dev->devx_event_table.event_xa_lock);
+
+	put_device(&dev->ib_dev.dev);
 	return 0;
 };
 
@@ -2899,7 +2899,7 @@ DECLARE_UVERBS_NAMED_METHOD(
 DECLARE_UVERBS_NAMED_OBJECT(
 	MLX5_IB_OBJECT_DEVX_ASYNC_CMD_FD,
 	UVERBS_TYPE_ALLOC_FD(sizeof(struct devx_async_cmd_event_file),
-			     devx_hot_unplug_async_cmd_event_file,
+			     devx_async_cmd_event_destroy_uobj,
 			     &devx_async_cmd_event_fops, "[devx_async_cmd]",
 			     O_RDONLY),
 	&UVERBS_METHOD(MLX5_IB_METHOD_DEVX_ASYNC_CMD_FD_ALLOC));
@@ -2917,7 +2917,7 @@ DECLARE_UVERBS_NAMED_METHOD(
 DECLARE_UVERBS_NAMED_OBJECT(
 	MLX5_IB_OBJECT_DEVX_ASYNC_EVENT_FD,
 	UVERBS_TYPE_ALLOC_FD(sizeof(struct devx_async_event_file),
-			     devx_hot_unplug_async_event_file,
+			     devx_async_event_destroy_uobj,
 			     &devx_async_event_fops, "[devx_async_event]",
 			     O_RDONLY),
 	&UVERBS_METHOD(MLX5_IB_METHOD_DEVX_ASYNC_EVENT_FD_ALLOC));

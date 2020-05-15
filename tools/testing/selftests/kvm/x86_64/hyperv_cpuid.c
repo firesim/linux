@@ -26,6 +26,25 @@ static void guest_code(void)
 {
 }
 
+static int smt_possible(void)
+{
+	char buf[16];
+	FILE *f;
+	bool res = 1;
+
+	f = fopen("/sys/devices/system/cpu/smt/control", "r");
+	if (f) {
+		if (fread(buf, sizeof(*buf), sizeof(buf), f) > 0) {
+			if (!strncmp(buf, "forceoff", 8) ||
+			    !strncmp(buf, "notsupported", 12))
+				res = 0;
+		}
+		fclose(f);
+	}
+
+	return res;
+}
+
 static void test_hv_cpuid(struct kvm_cpuid2 *hv_cpuid_entries,
 			  int evmcs_enabled)
 {
@@ -47,7 +66,7 @@ static void test_hv_cpuid(struct kvm_cpuid2 *hv_cpuid_entries,
 
 		TEST_ASSERT((entry->function >= 0x40000000) &&
 			    (entry->function <= 0x4000000A),
-			    "function %lx is our of supported range",
+			    "function %x is our of supported range",
 			    entry->function);
 
 		TEST_ASSERT(entry->index == 0,
@@ -58,6 +77,14 @@ static void test_hv_cpuid(struct kvm_cpuid2 *hv_cpuid_entries,
 
 		TEST_ASSERT(!entry->padding[0] && !entry->padding[1] &&
 			    !entry->padding[2], "padding should be zero");
+
+		if (entry->function == 0x40000004) {
+			int nononarchcs = !!(entry->eax & (1UL << 18));
+
+			TEST_ASSERT(nononarchcs == !smt_possible(),
+				    "NoNonArchitecturalCoreSharing bit"
+				    " doesn't reflect SMT setting");
+		}
 
 		/*
 		 * If needed for debug:
@@ -114,8 +141,7 @@ int main(int argc, char *argv[])
 
 	rv = kvm_check_cap(KVM_CAP_HYPERV_CPUID);
 	if (!rv) {
-		fprintf(stderr,
-			"KVM_CAP_HYPERV_CPUID not supported, skip test\n");
+		print_skip("KVM_CAP_HYPERV_CPUID not supported");
 		exit(KSFT_SKIP);
 	}
 
@@ -133,8 +159,7 @@ int main(int argc, char *argv[])
 	free(hv_cpuid_entries);
 
 	if (!kvm_check_cap(KVM_CAP_HYPERV_ENLIGHTENED_VMCS)) {
-		fprintf(stderr,
-			"Enlightened VMCS is unsupported, skip related test\n");
+		print_skip("Enlightened VMCS is unsupported");
 		goto vm_free;
 	}
 

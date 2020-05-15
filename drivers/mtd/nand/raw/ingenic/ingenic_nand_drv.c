@@ -253,7 +253,7 @@ static int ingenic_nand_attach_chip(struct nand_chip *chip)
 		chip->ecc.hwctl = ingenic_nand_ecc_hwctl;
 		chip->ecc.calculate = ingenic_nand_ecc_calculate;
 		chip->ecc.correct = ingenic_nand_ecc_correct;
-		/* fall through */
+		fallthrough;
 	case NAND_ECC_SOFT:
 		dev_info(nfc->dev, "using %s (strength %d, size %d, bytes %d)\n",
 			 (nfc->ecc) ? "hardware ECC" : "software ECC",
@@ -310,7 +310,6 @@ static int ingenic_nand_init_chip(struct platform_device *pdev,
 	struct device *dev = &pdev->dev;
 	struct ingenic_nand *nand;
 	struct ingenic_nand_cs *cs;
-	struct resource *res;
 	struct nand_chip *chip;
 	struct mtd_info *mtd;
 	const __be32 *reg;
@@ -326,8 +325,7 @@ static int ingenic_nand_init_chip(struct platform_device *pdev,
 
 	jz4780_nemc_set_type(nfc->dev, cs->bank, JZ4780_NEMC_BANK_NAND);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, chipnr);
-	cs->base = devm_ioremap_resource(dev, res);
+	cs->base = devm_platform_ioremap_resource(pdev, chipnr);
 	if (IS_ERR(cs->base))
 		return PTR_ERR(cs->base);
 
@@ -418,6 +416,7 @@ static int ingenic_nand_init_chips(struct ingenic_nfc *nfc,
 		ret = ingenic_nand_init_chip(pdev, nfc, np, i);
 		if (ret) {
 			ingenic_nand_cleanup_chips(nfc);
+			of_node_put(np);
 			return ret;
 		}
 

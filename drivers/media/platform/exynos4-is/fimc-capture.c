@@ -738,10 +738,7 @@ static int fimc_cap_enum_fmt(struct file *file, void *priv,
 			       f->index);
 	if (!fmt)
 		return -EINVAL;
-	strscpy(f->description, fmt->name, sizeof(f->description));
 	f->pixelformat = fmt->fourcc;
-	if (fmt->fourcc == MEDIA_BUS_FMT_JPEG_1X8)
-		f->flags |= V4L2_FMT_FLAG_COMPRESSED;
 	return 0;
 }
 
@@ -1811,7 +1808,7 @@ static int fimc_register_capture_device(struct fimc_dev *fimc,
 	if (ret)
 		goto err_me_cleanup;
 
-	ret = video_register_device(vfd, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(vfd, VFL_TYPE_VIDEO, -1);
 	if (ret)
 		goto err_ctrl_free;
 

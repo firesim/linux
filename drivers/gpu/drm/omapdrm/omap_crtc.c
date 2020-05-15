@@ -4,12 +4,14 @@
  * Author: Rob Clark <rob@ti.com>
  */
 
+#include <linux/math64.h>
+
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_mode.h>
 #include <drm/drm_plane_helper.h>
-#include <linux/math64.h>
+#include <drm/drm_vblank.h>
 
 #include "omap_drv.h"
 
@@ -829,7 +831,7 @@ struct drm_crtc *omap_crtc_init(struct drm_device *dev,
 	 * OMAP_DSS_CHANNEL_DIGIT. X server assumes 256 element gamma
 	 * tables so lets use that. Size of HW gamma table can be
 	 * extracted with dispc_mgr_gamma_size(). If it returns 0
-	 * gamma table is not supprted.
+	 * gamma table is not supported.
 	 */
 	if (priv->dispc_ops->mgr_gamma_size(priv->dispc, channel)) {
 		unsigned int gamma_lut_size = 256;

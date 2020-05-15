@@ -9,6 +9,9 @@
 #include <linux/sched/task.h>
 #include <linux/cred.h>
 #include <linux/refcount.h>
+#include <linux/posix-timers.h>
+#include <linux/mm_types.h>
+#include <asm/ptrace.h>
 
 /*
  * Types defining task->signal and task->sighand and APIs using them:
@@ -56,18 +59,12 @@ struct task_cputime_atomic {
 /**
  * struct thread_group_cputimer - thread group interval timer counts
  * @cputime_atomic:	atomic thread group interval timers.
- * @running:		true when there are timers running and
- *			@cputime_atomic receives updates.
- * @checking_timer:	true when a thread in the group is in the
- *			process of checking for thread group timers.
  *
  * This structure contains the version of task_cputime, above, that is
  * used for thread group CPU timer calculations.
  */
 struct thread_group_cputimer {
 	struct task_cputime_atomic cputime_atomic;
-	bool running;
-	bool checking_timer;
 };
 
 struct multiprocess_signals {
@@ -148,12 +145,9 @@ struct signal_struct {
 	 */
 	struct thread_group_cputimer cputimer;
 
-	/* Earliest-expiration cache. */
-	struct task_cputime cputime_expires;
-
-	struct list_head cpu_timers[3];
-
 #endif
+	/* Empty if CONFIG_POSIX_TIMERS=n */
+	struct posix_cputimers posix_cputimers;
 
 	/* PID/PID hash table linkage. */
 	struct pid *pids[PIDTYPE_MAX];
@@ -232,7 +226,14 @@ struct signal_struct {
 
 	struct mutex cred_guard_mutex;	/* guard against foreign influences on
 					 * credential calculations
-					 * (notably. ptrace) */
+					 * (notably. ptrace)
+					 * Deprecated do not use in new code.
+					 * Use exec_update_mutex instead.
+					 */
+	struct mutex exec_update_mutex;	/* Held while task_struct is being
+					 * updated during exec, and may have
+					 * inconsistent permissions.
+					 */
 } __randomize_layout;
 
 /*
@@ -375,6 +376,20 @@ static inline int signal_pending_state(long state, struct task_struct *p)
 		return 0;
 
 	return (state & TASK_INTERRUPTIBLE) || __fatal_signal_pending(p);
+}
+
+/*
+ * This should only be used in fault handlers to decide whether we
+ * should stop the current fault routine to handle the signals
+ * instead, especially with the case where we've got interrupted with
+ * a VM_FAULT_RETRY.
+ */
+static inline bool fault_signal_pending(vm_fault_t fault_flags,
+					struct pt_regs *regs)
+{
+	return unlikely((fault_flags & VM_FAULT_RETRY) &&
+			(fatal_signal_pending(current) ||
+			 (user_mode(regs) && signal_pending(current))));
 }
 
 /*

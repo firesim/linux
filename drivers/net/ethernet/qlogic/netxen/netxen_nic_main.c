@@ -49,7 +49,7 @@ static int netxen_nic_open(struct net_device *netdev);
 static int netxen_nic_close(struct net_device *netdev);
 static netdev_tx_t netxen_nic_xmit_frame(struct sk_buff *,
 					       struct net_device *);
-static void netxen_tx_timeout(struct net_device *netdev);
+static void netxen_tx_timeout(struct net_device *netdev, unsigned int txqueue);
 static void netxen_tx_timeout_task(struct work_struct *work);
 static void netxen_fw_poll_work(struct work_struct *work);
 static void netxen_schedule_work(struct netxen_adapter *adapter,
@@ -1980,7 +1980,7 @@ netxen_map_tx_skb(struct pci_dev *pdev,
 		struct sk_buff *skb, struct netxen_cmd_buffer *pbuf)
 {
 	struct netxen_skb_frag *nf;
-	struct skb_frag_struct *frag;
+	skb_frag_t *frag;
 	int i, nr_frags;
 	dma_addr_t map;
 
@@ -2043,7 +2043,7 @@ netxen_nic_xmit_frame(struct sk_buff *skb, struct net_device *netdev)
 	struct pci_dev *pdev;
 	int i, k;
 	int delta = 0;
-	struct skb_frag_struct *frag;
+	skb_frag_t *frag;
 
 	u32 producer;
 	int frag_count;
@@ -2222,7 +2222,7 @@ static void netxen_nic_handle_phy_intr(struct netxen_adapter *adapter)
 	netxen_advert_link_change(adapter, linkup);
 }
 
-static void netxen_tx_timeout(struct net_device *netdev)
+static void netxen_tx_timeout(struct net_device *netdev, unsigned int txqueue)
 {
 	struct netxen_adapter *adapter = netdev_priv(netdev);
 

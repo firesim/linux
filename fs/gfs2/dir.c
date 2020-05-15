@@ -73,9 +73,6 @@
 #include "bmap.h"
 #include "util.h"
 
-#define IS_LEAF     1 /* Hashed (leaf) directory */
-#define IS_DINODE   2 /* Linear (stuffed dinode block) directory */
-
 #define MAX_RA_BLOCKS 32 /* max read-ahead blocks */
 
 #define gfs2_disk_hash2offset(h) (((u64)(h)) >> 1)
@@ -1463,8 +1460,7 @@ static int gfs2_dir_read_leaf(struct inode *inode, struct dir_context *ctx,
 				sort_offset : entries, copied);
 out_free:
 	for(i = 0; i < leaf; i++)
-		if (larr[i])
-			brelse(larr[i]);
+		brelse(larr[i]);
 	kvfree(larr);
 out:
 	return error;
@@ -2032,7 +2028,8 @@ static int leaf_dealloc(struct gfs2_inode *dip, u32 index, u32 len,
 
 	error = gfs2_trans_begin(sdp,
 			rg_blocks + (DIV_ROUND_UP(size, sdp->sd_jbsize) + 1) +
-			RES_DINODE + RES_STATFS + RES_QUOTA, l_blocks);
+			RES_DINODE + RES_STATFS + RES_QUOTA, RES_DINODE +
+				 l_blocks);
 	if (error)
 		goto out_rg_gunlock;
 

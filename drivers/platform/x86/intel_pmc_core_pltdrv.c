@@ -18,8 +18,16 @@
 #include <asm/cpu_device_id.h>
 #include <asm/intel-family.h>
 
+static void intel_pmc_core_release(struct device *dev)
+{
+	/* Nothing to do. */
+}
+
 static struct platform_device pmc_core_device = {
 	.name = "intel_pmc_core",
+	.dev  = {
+		.release = intel_pmc_core_release,
+	},
 };
 
 /*
@@ -30,12 +38,14 @@ static struct platform_device pmc_core_device = {
  * other list may grow, but this list should not.
  */
 static const struct x86_cpu_id intel_pmc_core_platform_ids[] = {
-	INTEL_CPU_FAM6(SKYLAKE_MOBILE, pmc_core_device),
-	INTEL_CPU_FAM6(SKYLAKE_DESKTOP, pmc_core_device),
-	INTEL_CPU_FAM6(KABYLAKE_MOBILE, pmc_core_device),
-	INTEL_CPU_FAM6(KABYLAKE_DESKTOP, pmc_core_device),
-	INTEL_CPU_FAM6(CANNONLAKE_MOBILE, pmc_core_device),
-	INTEL_CPU_FAM6(ICELAKE_MOBILE, pmc_core_device),
+	X86_MATCH_INTEL_FAM6_MODEL(SKYLAKE_L,		&pmc_core_device),
+	X86_MATCH_INTEL_FAM6_MODEL(SKYLAKE,		&pmc_core_device),
+	X86_MATCH_INTEL_FAM6_MODEL(KABYLAKE_L,		&pmc_core_device),
+	X86_MATCH_INTEL_FAM6_MODEL(KABYLAKE,		&pmc_core_device),
+	X86_MATCH_INTEL_FAM6_MODEL(CANNONLAKE_L,	&pmc_core_device),
+	X86_MATCH_INTEL_FAM6_MODEL(ICELAKE_L,		&pmc_core_device),
+	X86_MATCH_INTEL_FAM6_MODEL(COMETLAKE,		&pmc_core_device),
+	X86_MATCH_INTEL_FAM6_MODEL(COMETLAKE_L,		&pmc_core_device),
 	{}
 };
 MODULE_DEVICE_TABLE(x86cpu, intel_pmc_core_platform_ids);

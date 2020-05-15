@@ -45,16 +45,13 @@ struct rw_semaphore {
 #endif
 	raw_spinlock_t wait_lock;
 	struct list_head wait_list;
+#ifdef CONFIG_DEBUG_RWSEMS
+	void *magic;
+#endif
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lockdep_map	dep_map;
 #endif
 };
-
-/*
- * Setting all bits of the owner field except bit 0 will indicate
- * that the rwsem is writer-owned with an unknown owner.
- */
-#define RWSEM_OWNER_UNKNOWN	(-2L)
 
 /* In all implementations count != 0 means locked */
 static inline int rwsem_is_locked(struct rw_semaphore *sem)
@@ -68,9 +65,19 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 /* Common initializer macros and functions */
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
-# define __RWSEM_DEP_MAP_INIT(lockname) , .dep_map = { .name = #lockname }
+# define __RWSEM_DEP_MAP_INIT(lockname)			\
+	, .dep_map = {					\
+		.name = #lockname,			\
+		.wait_type_inner = LD_WAIT_SLEEP,	\
+	}
 #else
 # define __RWSEM_DEP_MAP_INIT(lockname)
+#endif
+
+#ifdef CONFIG_DEBUG_RWSEMS
+# define __DEBUG_RWSEM_INITIALIZER(lockname) , .magic = &lockname
+#else
+# define __DEBUG_RWSEM_INITIALIZER(lockname)
 #endif
 
 #ifdef CONFIG_RWSEM_SPIN_ON_OWNER
@@ -85,6 +92,7 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 	  .wait_list = LIST_HEAD_INIT((name).wait_list),	\
 	  .wait_lock = __RAW_SPIN_LOCK_UNLOCKED(name.wait_lock)	\
 	  __RWSEM_OPT_INIT(name)				\
+	  __DEBUG_RWSEM_INITIALIZER(name)			\
 	  __RWSEM_DEP_MAP_INIT(name) }
 
 #define DECLARE_RWSEM(name) \

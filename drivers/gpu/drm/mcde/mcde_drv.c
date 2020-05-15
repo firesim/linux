@@ -20,11 +20,11 @@
  * input formats including most variants of RGB and YUV.
  *
  * The hardware has four display pipes, and the layout is a little
- * bit like this:
+ * bit like this::
  *
- * Memory     -> Overlay -> Channel -> FIFO -> 5 formatters -> DSI/DPI
- * External      0..5       0..3       A,B,    3 x DSI         bridge
- * source 0..9                         C0,C1   2 x DPI
+ *   Memory     -> Overlay -> Channel -> FIFO -> 5 formatters -> DSI/DPI
+ *   External      0..5       0..3       A,B,    3 x DSI         bridge
+ *   source 0..9                         C0,C1   2 x DPI
  *
  * FIFOs A and B are for LCD and HDMI while FIFO CO/C1 are for
  * panels with embedded buffer.
@@ -43,6 +43,7 @@
  * to change as we exploit more of the hardware capabilities.
  *
  * TODO:
+ *
  * - Enabled damaged rectangles using drm_plane_enable_fb_damage_clips()
  *   so we can selectively just transmit the damaged area to a
  *   command-only display.
@@ -179,18 +180,10 @@ static int mcde_modeset_init(struct drm_device *drm)
 	mode_config->min_height = 1;
 	mode_config->max_height = 1080;
 
-	/*
-	 * Currently we only support vblank handling on the DSI bridge, using
-	 * TE synchronization. If TE sync is not set up, it is still possible
-	 * to push out a single update on demand, but this is hard for DRM to
-	 * exploit.
-	 */
-	if (mcde->te_sync) {
-		ret = drm_vblank_init(drm, 1);
-		if (ret) {
-			dev_err(drm->dev, "failed to init vblank\n");
-			goto out_config;
-		}
+	ret = drm_vblank_init(drm, 1);
+	if (ret) {
+		dev_err(drm->dev, "failed to init vblank\n");
+		goto out_config;
 	}
 
 	ret = mcde_display_init(drm);
@@ -237,7 +230,7 @@ DEFINE_DRM_GEM_CMA_FOPS(drm_fops);
 
 static struct drm_driver mcde_drm_driver = {
 	.driver_features =
-		DRIVER_MODESET | DRIVER_GEM | DRIVER_PRIME | DRIVER_ATOMIC,
+		DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
 	.release = mcde_release,
 	.lastclose = drm_fb_helper_lastclose,
 	.ioctls = NULL,
@@ -254,8 +247,6 @@ static struct drm_driver mcde_drm_driver = {
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
 	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
-	.gem_prime_import = drm_gem_prime_import,
-	.gem_prime_export = drm_gem_prime_export,
 	.gem_prime_get_sg_table	= drm_gem_cma_prime_get_sg_table,
 	.gem_prime_import_sg_table = drm_gem_cma_prime_import_sg_table,
 	.gem_prime_vmap = drm_gem_cma_prime_vmap,
@@ -319,7 +310,7 @@ static int mcde_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct drm_device *drm;
 	struct mcde *mcde;
-	struct component_match *match;
+	struct component_match *match = NULL;
 	struct resource *res;
 	u32 pid;
 	u32 val;
@@ -341,8 +332,6 @@ static int mcde_probe(struct platform_device *pdev)
 	drm->dev_private = mcde;
 	platform_set_drvdata(pdev, drm);
 
-	/* Enable use of the TE signal and interrupt */
-	mcde->te_sync = true;
 	/* Enable continuous updates: this is what Linux' framebuffer expects */
 	mcde->oneshot_mode = false;
 	drm->dev_private = mcde;
@@ -477,13 +466,17 @@ static int mcde_probe(struct platform_device *pdev)
 		struct device_driver *drv = &mcde_component_drivers[i]->driver;
 		struct device *p = NULL, *d;
 
-		while ((d = bus_find_device(&platform_bus_type, p, drv,
-					    (void *)platform_bus_type.match))) {
+		while ((d = platform_find_device_by_driver(p, drv))) {
 			put_device(p);
 			component_match_add(dev, &match, mcde_compare_dev, d);
 			p = d;
 		}
 		put_device(p);
+	}
+	if (!match) {
+		dev_err(dev, "no matching components\n");
+		ret = -ENODEV;
+		goto clk_disable;
 	}
 	if (IS_ERR(match)) {
 		dev_err(dev, "could not create component match\n");

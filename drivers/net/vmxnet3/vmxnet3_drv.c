@@ -657,13 +657,12 @@ static void
 vmxnet3_append_frag(struct sk_buff *skb, struct Vmxnet3_RxCompDesc *rcd,
 		    struct vmxnet3_rx_buf_info *rbi)
 {
-	struct skb_frag_struct *frag = skb_shinfo(skb)->frags +
-		skb_shinfo(skb)->nr_frags;
+	skb_frag_t *frag = skb_shinfo(skb)->frags + skb_shinfo(skb)->nr_frags;
 
 	BUG_ON(skb_shinfo(skb)->nr_frags >= MAX_SKB_FRAGS);
 
 	__skb_frag_set_page(frag, rbi->page);
-	frag->page_offset = 0;
+	skb_frag_off_set(frag, 0);
 	skb_frag_size_set(frag, rcd->len);
 	skb->data_len += rcd->len;
 	skb->truesize += PAGE_SIZE;
@@ -755,7 +754,7 @@ vmxnet3_map_pkt(struct sk_buff *skb, struct vmxnet3_tx_ctx *ctx,
 	}
 
 	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
-		const struct skb_frag_struct *frag = &skb_shinfo(skb)->frags[i];
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
 		u32 buf_size;
 
 		buf_offset = 0;
@@ -943,10 +942,7 @@ vmxnet3_prepare_tso(struct sk_buff *skb,
 		tcph->check = ~csum_tcpudp_magic(iph->saddr, iph->daddr, 0,
 						 IPPROTO_TCP, 0);
 	} else if (ctx->ipv6) {
-		struct ipv6hdr *iph = ipv6_hdr(skb);
-
-		tcph->check = ~csum_ipv6_magic(&iph->saddr, &iph->daddr, 0,
-					       IPPROTO_TCP, 0);
+		tcp_v6_gso_csum_prep(skb);
 	}
 }
 
@@ -956,7 +952,7 @@ static int txd_estimate(const struct sk_buff *skb)
 	int i;
 
 	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
-		const struct skb_frag_struct *frag = &skb_shinfo(skb)->frags[i];
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
 
 		count += VMXNET3_TXD_NEEDED(skb_frag_size(frag));
 	}
@@ -3199,7 +3195,7 @@ vmxnet3_free_intr_resources(struct vmxnet3_adapter *adapter)
 
 
 static void
-vmxnet3_tx_timeout(struct net_device *netdev)
+vmxnet3_tx_timeout(struct net_device *netdev, unsigned int txqueue)
 {
 	struct vmxnet3_adapter *adapter = netdev_priv(netdev);
 	adapter->tx_timeout_count++;

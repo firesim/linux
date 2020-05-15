@@ -73,7 +73,7 @@ void __iomem *__nfit_test_ioremap(resource_size_t offset, unsigned long size,
 	return fallback_fn(offset, size);
 }
 
-void __iomem *__wrap_devm_ioremap_nocache(struct device *dev,
+void __iomem *__wrap_devm_ioremap(struct device *dev,
 		resource_size_t offset, unsigned long size)
 {
 	struct nfit_test_resource *nfit_res = get_nfit_res(offset);
@@ -81,9 +81,9 @@ void __iomem *__wrap_devm_ioremap_nocache(struct device *dev,
 	if (nfit_res)
 		return (void __iomem *) nfit_res->buf + offset
 			- nfit_res->res.start;
-	return devm_ioremap_nocache(dev, offset, size);
+	return devm_ioremap(dev, offset, size);
 }
-EXPORT_SYMBOL(__wrap_devm_ioremap_nocache);
+EXPORT_SYMBOL(__wrap_devm_ioremap);
 
 void *__wrap_devm_memremap(struct device *dev, resource_size_t offset,
 		size_t size, unsigned long flags)
@@ -132,7 +132,6 @@ void *__wrap_devm_memremap_pages(struct device *dev, struct dev_pagemap *pgmap)
 	if (!nfit_res)
 		return devm_memremap_pages(dev, pgmap);
 
-	pgmap->dev = dev;
 	if (!pgmap->ref) {
 		if (pgmap->ops && (pgmap->ops->kill || pgmap->ops->cleanup))
 			return ERR_PTR(-EINVAL);
@@ -188,11 +187,11 @@ void __wrap_devm_memunmap(struct device *dev, void *addr)
 }
 EXPORT_SYMBOL(__wrap_devm_memunmap);
 
-void __iomem *__wrap_ioremap_nocache(resource_size_t offset, unsigned long size)
+void __iomem *__wrap_ioremap(resource_size_t offset, unsigned long size)
 {
-	return __nfit_test_ioremap(offset, size, ioremap_nocache);
+	return __nfit_test_ioremap(offset, size, ioremap);
 }
-EXPORT_SYMBOL(__wrap_ioremap_nocache);
+EXPORT_SYMBOL(__wrap_ioremap);
 
 void __iomem *__wrap_ioremap_wc(resource_size_t offset, unsigned long size)
 {

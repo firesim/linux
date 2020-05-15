@@ -287,12 +287,9 @@ static void tpm_devs_release(struct device *dev)
  * @dev: device to which the chip is associated.
  *
  * Issues a TPM2_Shutdown command prior to loss of power, as required by the
- * TPM 2.0 spec.
- * Then, calls bus- and device- specific shutdown code.
+ * TPM 2.0 spec. Then, calls bus- and device- specific shutdown code.
  *
- * XXX: This codepath relies on the fact that sysfs is not enabled for
- * TPM2: sysfs uses an implicit lock on chip->ops, so this could race if TPM2
- * has sysfs support enabled before TPM sysfs's implicit locking is fixed.
+ * Return: always 0 (i.e. success)
  */
 static int tpm_class_shutdown(struct device *dev)
 {
@@ -517,15 +514,15 @@ static int tpm_add_legacy_sysfs(struct tpm_chip *chip)
 	if (chip->flags & (TPM_CHIP_FLAG_TPM2 | TPM_CHIP_FLAG_VIRTUAL))
 		return 0;
 
-	rc = __compat_only_sysfs_link_entry_to_kobj(
-		    &chip->dev.parent->kobj, &chip->dev.kobj, "ppi");
+	rc = compat_only_sysfs_link_entry_to_kobj(
+		    &chip->dev.parent->kobj, &chip->dev.kobj, "ppi", NULL);
 	if (rc && rc != -ENOENT)
 		return rc;
 
 	/* All the names from tpm-sysfs */
 	for (i = chip->groups[0]->attrs; *i != NULL; ++i) {
-		rc = __compat_only_sysfs_link_entry_to_kobj(
-		    &chip->dev.parent->kobj, &chip->dev.kobj, (*i)->name);
+		rc = compat_only_sysfs_link_entry_to_kobj(
+		    &chip->dev.parent->kobj, &chip->dev.kobj, (*i)->name, NULL);
 		if (rc) {
 			tpm_del_legacy_sysfs(chip);
 			return rc;
@@ -599,9 +596,7 @@ int tpm_chip_register(struct tpm_chip *chip)
 
 	tpm_sysfs_add_device(chip);
 
-	rc = tpm_bios_log_setup(chip);
-	if (rc != 0 && rc != -ENODEV)
-		return rc;
+	tpm_bios_log_setup(chip);
 
 	tpm_add_ppi(chip);
 

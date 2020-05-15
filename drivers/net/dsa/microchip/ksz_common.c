@@ -18,17 +18,7 @@
 #include <net/dsa.h>
 #include <net/switchdev.h>
 
-#include "ksz_priv.h"
-
-void ksz_port_cleanup(struct ksz_device *dev, int port)
-{
-	/* Common code for port cleanup. */
-	mutex_lock(&dev->dev_mutex);
-	dev->on_ports &= ~(1 << port);
-	dev->live_ports &= ~(1 << port);
-	mutex_unlock(&dev->dev_mutex);
-}
-EXPORT_SYMBOL_GPL(ksz_port_cleanup);
+#include "ksz_common.h"
 
 void ksz_update_port_member(struct ksz_device *dev, int port)
 {
@@ -77,7 +67,7 @@ static void port_r_cnt(struct ksz_device *dev, int port)
 static void ksz_mib_read_work(struct work_struct *work)
 {
 	struct ksz_device *dev = container_of(work, struct ksz_device,
-					      mib_read);
+					      mib_read.work);
 	struct ksz_port_mib *mib;
 	struct ksz_port *p;
 	int i;
@@ -103,32 +93,24 @@ static void ksz_mib_read_work(struct work_struct *work)
 		p->read = false;
 		mutex_unlock(&mib->cnt_mutex);
 	}
-}
 
-static void mib_monitor(struct timer_list *t)
-{
-	struct ksz_device *dev = from_timer(dev, t, mib_read_timer);
-
-	mod_timer(&dev->mib_read_timer, jiffies + dev->mib_read_interval);
-	schedule_work(&dev->mib_read);
+	schedule_delayed_work(&dev->mib_read, dev->mib_read_interval);
 }
 
 void ksz_init_mib_timer(struct ksz_device *dev)
 {
 	int i;
 
+	INIT_DELAYED_WORK(&dev->mib_read, ksz_mib_read_work);
+
 	/* Read MIB counters every 30 seconds to avoid overflow. */
 	dev->mib_read_interval = msecs_to_jiffies(30000);
-
-	INIT_WORK(&dev->mib_read, ksz_mib_read_work);
-	timer_setup(&dev->mib_read_timer, mib_monitor, 0);
 
 	for (i = 0; i < dev->mib_port_cnt; i++)
 		dev->dev_ops->port_init_cnt(dev, i);
 
 	/* Start the timer 2 seconds later. */
-	dev->mib_read_timer.expires = jiffies + msecs_to_jiffies(2000);
-	add_timer(&dev->mib_read_timer);
+	schedule_delayed_work(&dev->mib_read, msecs_to_jiffies(2000));
 }
 EXPORT_SYMBOL_GPL(ksz_init_mib_timer);
 
@@ -162,7 +144,7 @@ void ksz_adjust_link(struct dsa_switch *ds, int port,
 	/* Read all MIB counters when the link is going down. */
 	if (!phydev->link) {
 		p->read = true;
-		schedule_work(&dev->mib_read);
+		schedule_delayed_work(&dev->mib_read, 0);
 	}
 	mutex_lock(&dev->dev_mutex);
 	if (!phydev->link)
@@ -371,9 +353,13 @@ int ksz_enable_port(struct dsa_switch *ds, int port, struct phy_device *phy)
 {
 	struct ksz_device *dev = ds->priv;
 
+	if (!dsa_is_user_port(ds, port))
+		return 0;
+
 	/* setup slave port */
 	dev->dev_ops->port_setup(dev, port, false);
-	dev->dev_ops->phy_setup(dev, port, phy);
+	if (dev->dev_ops->phy_setup)
+		dev->dev_ops->phy_setup(dev, port, phy);
 
 	/* port_stp_state_set() will be called after to enable the port so
 	 * there is no need to do anything.
@@ -386,6 +372,9 @@ EXPORT_SYMBOL_GPL(ksz_enable_port);
 void ksz_disable_port(struct dsa_switch *ds, int port)
 {
 	struct ksz_device *dev = ds->priv;
+
+	if (!dsa_is_user_port(ds, port))
+		return;
 
 	dev->on_ports &= ~(1 << port);
 	dev->live_ports &= ~(1 << port);
@@ -401,9 +390,12 @@ struct ksz_device *ksz_switch_alloc(struct device *base, void *priv)
 	struct dsa_switch *ds;
 	struct ksz_device *swdev;
 
-	ds = dsa_switch_alloc(base, DSA_MAX_PORTS);
+	ds = devm_kzalloc(base, sizeof(*ds), GFP_KERNEL);
 	if (!ds)
 		return NULL;
+
+	ds->dev = base;
+	ds->num_ports = DSA_MAX_PORTS;
 
 	swdev = devm_kzalloc(base, sizeof(*swdev), GFP_KERNEL);
 	if (!swdev)
@@ -422,6 +414,7 @@ EXPORT_SYMBOL(ksz_switch_alloc);
 int ksz_switch_register(struct ksz_device *dev,
 			const struct ksz_dev_ops *ops)
 {
+	phy_interface_t interface;
 	int ret;
 
 	if (dev->pdata)
@@ -439,7 +432,7 @@ int ksz_switch_register(struct ksz_device *dev,
 	}
 
 	mutex_init(&dev->dev_mutex);
-	mutex_init(&dev->stats_mutex);
+	mutex_init(&dev->regmap_mutex);
 	mutex_init(&dev->alu_mutex);
 	mutex_init(&dev->vlan_mutex);
 
@@ -456,9 +449,9 @@ int ksz_switch_register(struct ksz_device *dev,
 	 * device tree.
 	 */
 	if (dev->dev->of_node) {
-		ret = of_get_phy_mode(dev->dev->of_node);
-		if (ret >= 0)
-			dev->interface = ret;
+		ret = of_get_phy_mode(dev->dev->of_node, &interface);
+		if (ret == 0)
+			dev->interface = interface;
 		dev->synclko_125 = of_property_read_bool(dev->dev->of_node,
 							 "microchip,synclko-125");
 	}
@@ -476,10 +469,8 @@ EXPORT_SYMBOL(ksz_switch_register);
 void ksz_switch_remove(struct ksz_device *dev)
 {
 	/* timer started */
-	if (dev->mib_read_timer.expires) {
-		del_timer_sync(&dev->mib_read_timer);
-		flush_work(&dev->mib_read);
-	}
+	if (dev->mib_read_interval)
+		cancel_delayed_work_sync(&dev->mib_read);
 
 	dev->dev_ops->exit(dev);
 	dsa_unregister_switch(dev->ds);

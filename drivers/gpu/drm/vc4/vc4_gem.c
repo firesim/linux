@@ -29,6 +29,8 @@
 #include <linux/sched/signal.h>
 #include <linux/dma-fence-array.h>
 
+#include <drm/drm_syncobj.h>
+
 #include "uapi/drm/vc4_drm.h"
 #include "vc4_drv.h"
 #include "vc4_regs.h"
@@ -541,7 +543,7 @@ vc4_update_bo_seqnos(struct vc4_exec_info *exec, uint64_t seqno)
 		bo = to_vc4_bo(&exec->bo[i]->base);
 		bo->seqno = seqno;
 
-		reservation_object_add_shared_fence(bo->base.base.resv, exec->fence);
+		dma_resv_add_shared_fence(bo->base.base.resv, exec->fence);
 	}
 
 	list_for_each_entry(bo, &exec->unref_list, unref_head) {
@@ -552,7 +554,7 @@ vc4_update_bo_seqnos(struct vc4_exec_info *exec, uint64_t seqno)
 		bo = to_vc4_bo(&exec->rcl_write_bo[i]->base);
 		bo->write_seqno = seqno;
 
-		reservation_object_add_excl_fence(bo->base.base.resv, exec->fence);
+		dma_resv_add_excl_fence(bo->base.base.resv, exec->fence);
 	}
 }
 
@@ -566,7 +568,7 @@ vc4_unlock_bo_reservations(struct drm_device *dev,
 	for (i = 0; i < exec->bo_count; i++) {
 		struct drm_gem_object *bo = &exec->bo[i]->base;
 
-		ww_mutex_unlock(&bo->resv->lock);
+		dma_resv_unlock(bo->resv);
 	}
 
 	ww_acquire_fini(acquire_ctx);
@@ -593,8 +595,7 @@ vc4_lock_bo_reservations(struct drm_device *dev,
 retry:
 	if (contended_lock != -1) {
 		bo = &exec->bo[contended_lock]->base;
-		ret = ww_mutex_lock_slow_interruptible(&bo->resv->lock,
-						       acquire_ctx);
+		ret = dma_resv_lock_slow_interruptible(bo->resv, acquire_ctx);
 		if (ret) {
 			ww_acquire_done(acquire_ctx);
 			return ret;
@@ -607,19 +608,19 @@ retry:
 
 		bo = &exec->bo[i]->base;
 
-		ret = ww_mutex_lock_interruptible(&bo->resv->lock, acquire_ctx);
+		ret = dma_resv_lock_interruptible(bo->resv, acquire_ctx);
 		if (ret) {
 			int j;
 
 			for (j = 0; j < i; j++) {
 				bo = &exec->bo[j]->base;
-				ww_mutex_unlock(&bo->resv->lock);
+				dma_resv_unlock(bo->resv);
 			}
 
 			if (contended_lock != -1 && contended_lock >= i) {
 				bo = &exec->bo[contended_lock]->base;
 
-				ww_mutex_unlock(&bo->resv->lock);
+				dma_resv_unlock(bo->resv);
 			}
 
 			if (ret == -EDEADLK) {
@@ -640,7 +641,7 @@ retry:
 	for (i = 0; i < exec->bo_count; i++) {
 		bo = &exec->bo[i]->base;
 
-		ret = reservation_object_reserve_shared(bo->resv, 1);
+		ret = dma_resv_reserve_shared(bo->resv, 1);
 		if (ret) {
 			vc4_unlock_bo_reservations(dev, exec, acquire_ctx);
 			return ret;

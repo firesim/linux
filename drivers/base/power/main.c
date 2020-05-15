@@ -40,6 +40,10 @@
 
 typedef int (*pm_callback_t)(struct device *);
 
+#define list_for_each_entry_rcu_locked(pos, head, member) \
+	list_for_each_entry_rcu(pos, head, member, \
+			device_links_read_lock_held())
+
 /*
  * The entries in the dpm_list list are in a depth first order, simply
  * because children are guaranteed to be discovered after parents, and
@@ -266,17 +270,45 @@ static void dpm_wait_for_suppliers(struct device *dev, bool async)
 	 * callbacks freeing the link objects for the links in the list we're
 	 * walking.
 	 */
-	list_for_each_entry_rcu(link, &dev->links.suppliers, c_node)
+	list_for_each_entry_rcu_locked(link, &dev->links.suppliers, c_node)
 		if (READ_ONCE(link->status) != DL_STATE_DORMANT)
 			dpm_wait(link->supplier, async);
 
 	device_links_read_unlock(idx);
 }
 
-static void dpm_wait_for_superior(struct device *dev, bool async)
+static bool dpm_wait_for_superior(struct device *dev, bool async)
 {
-	dpm_wait(dev->parent, async);
+	struct device *parent;
+
+	/*
+	 * If the device is resumed asynchronously and the parent's callback
+	 * deletes both the device and the parent itself, the parent object may
+	 * be freed while this function is running, so avoid that by reference
+	 * counting the parent once more unless the device has been deleted
+	 * already (in which case return right away).
+	 */
+	mutex_lock(&dpm_list_mtx);
+
+	if (!device_pm_initialized(dev)) {
+		mutex_unlock(&dpm_list_mtx);
+		return false;
+	}
+
+	parent = get_device(dev->parent);
+
+	mutex_unlock(&dpm_list_mtx);
+
+	dpm_wait(parent, async);
+	put_device(parent);
+
 	dpm_wait_for_suppliers(dev, async);
+
+	/*
+	 * If the parent's callback has deleted the device, attempting to resume
+	 * it would be invalid, so avoid doing that then.
+	 */
+	return device_pm_initialized(dev);
 }
 
 static void dpm_wait_for_consumers(struct device *dev, bool async)
@@ -295,7 +327,7 @@ static void dpm_wait_for_consumers(struct device *dev, bool async)
 	 * continue instead of trying to continue in parallel with its
 	 * unregistration).
 	 */
-	list_for_each_entry_rcu(link, &dev->links.consumers, s_node)
+	list_for_each_entry_rcu_locked(link, &dev->links.consumers, s_node)
 		if (READ_ONCE(link->status) != DL_STATE_DORMANT)
 			dpm_wait(link->consumer, async);
 
@@ -621,7 +653,8 @@ static int device_resume_noirq(struct device *dev, pm_message_t state, bool asyn
 	if (!dev->power.is_noirq_suspended)
 		goto Out;
 
-	dpm_wait_for_superior(dev, async);
+	if (!dpm_wait_for_superior(dev, async))
+		goto Out;
 
 	skip_resume = dev_pm_may_skip_resume(dev);
 
@@ -697,7 +730,7 @@ static bool dpm_async_fn(struct device *dev, async_func_t func)
 
 	if (is_async(dev)) {
 		get_device(dev);
-		async_schedule(func, dev);
+		async_schedule_dev(func, dev);
 		return true;
 	}
 
@@ -716,7 +749,7 @@ static void async_resume_noirq(void *data, async_cookie_t cookie)
 	put_device(dev);
 }
 
-void dpm_noirq_resume_devices(pm_message_t state)
+static void dpm_noirq_resume_devices(pm_message_t state)
 {
 	struct device *dev;
 	ktime_t starttime = ktime_get();
@@ -760,13 +793,6 @@ void dpm_noirq_resume_devices(pm_message_t state)
 	trace_suspend_resume(TPS("dpm_resume_noirq"), state.event, false);
 }
 
-void dpm_noirq_end(void)
-{
-	resume_device_irqs();
-	device_wakeup_disarm_wake_irqs();
-	cpuidle_resume();
-}
-
 /**
  * dpm_resume_noirq - Execute "noirq resume" callbacks for all devices.
  * @state: PM transition of the system being carried out.
@@ -777,7 +803,11 @@ void dpm_noirq_end(void)
 void dpm_resume_noirq(pm_message_t state)
 {
 	dpm_noirq_resume_devices(state);
-	dpm_noirq_end();
+
+	resume_device_irqs();
+	device_wakeup_disarm_wake_irqs();
+
+	cpuidle_resume();
 }
 
 static pm_callback_t dpm_subsys_resume_early_cb(struct device *dev,
@@ -832,7 +862,8 @@ static int device_resume_early(struct device *dev, pm_message_t state, bool asyn
 	if (!dev->power.is_late_suspended)
 		goto Out;
 
-	dpm_wait_for_superior(dev, async);
+	if (!dpm_wait_for_superior(dev, async))
+		goto Out;
 
 	callback = dpm_subsys_resume_early_cb(dev, state, &info);
 
@@ -947,7 +978,9 @@ static int device_resume(struct device *dev, pm_message_t state, bool async)
 		goto Complete;
 	}
 
-	dpm_wait_for_superior(dev, async);
+	if (!dpm_wait_for_superior(dev, async))
+		goto Complete;
+
 	dpm_watchdog_set(&wd, dev);
 	device_lock(dev);
 
@@ -1206,7 +1239,7 @@ static void dpm_superior_set_must_resume(struct device *dev)
 
 	idx = device_links_read_lock();
 
-	list_for_each_entry_rcu(link, &dev->links.suppliers, c_node)
+	list_for_each_entry_rcu_locked(link, &dev->links.suppliers, c_node)
 		link->supplier->power.must_resume = true;
 
 	device_links_read_unlock(idx);
@@ -1291,11 +1324,6 @@ static int __device_suspend_noirq(struct device *dev, pm_message_t state, bool a
 	if (async_error)
 		goto Complete;
 
-	if (pm_wakeup_pending()) {
-		async_error = -EBUSY;
-		goto Complete;
-	}
-
 	if (dev->power.syscore || dev->power.direct_complete)
 		goto Complete;
 
@@ -1362,14 +1390,7 @@ static int device_suspend_noirq(struct device *dev)
 	return __device_suspend_noirq(dev, pm_transition, false);
 }
 
-void dpm_noirq_begin(void)
-{
-	cpuidle_pause();
-	device_wakeup_arm_wake_irqs();
-	suspend_device_irqs();
-}
-
-int dpm_noirq_suspend_devices(pm_message_t state)
+static int dpm_noirq_suspend_devices(pm_message_t state)
 {
 	ktime_t starttime = ktime_get();
 	int error = 0;
@@ -1426,7 +1447,11 @@ int dpm_suspend_noirq(pm_message_t state)
 {
 	int ret;
 
-	dpm_noirq_begin();
+	cpuidle_pause();
+
+	device_wakeup_arm_wake_irqs();
+	suspend_device_irqs();
+
 	ret = dpm_noirq_suspend_devices(state);
 	if (ret)
 		dpm_resume_noirq(resume_event(state));
@@ -1674,7 +1699,7 @@ static void dpm_clear_superiors_direct_complete(struct device *dev)
 
 	idx = device_links_read_lock();
 
-	list_for_each_entry_rcu(link, &dev->links.suppliers, c_node) {
+	list_for_each_entry_rcu_locked(link, &dev->links.suppliers, c_node) {
 		spin_lock_irq(&link->supplier->power.lock);
 		link->supplier->power.direct_complete = false;
 		spin_unlock_irq(&link->supplier->power.lock);
@@ -1897,10 +1922,6 @@ static int device_prepare(struct device *dev, pm_message_t state)
 	if (dev->power.syscore)
 		return 0;
 
-	WARN_ON(!pm_runtime_enabled(dev) &&
-		dev_pm_test_driver_flags(dev, DPM_FLAG_SMART_SUSPEND |
-					      DPM_FLAG_LEAVE_SUSPENDED));
-
 	/*
 	 * If a device's parent goes into runtime suspend at the wrong time,
 	 * it won't be possible to resume the device.  To prevent this we
@@ -1948,8 +1969,7 @@ unlock:
 	 */
 	spin_lock_irq(&dev->power.lock);
 	dev->power.direct_complete = state.event == PM_EVENT_SUSPEND &&
-		((pm_runtime_suspended(dev) && ret > 0) ||
-		 dev->power.no_pm_callbacks) &&
+		(ret > 0 || dev->power.no_pm_callbacks) &&
 		!dev_pm_test_driver_flags(dev, DPM_FLAG_NEVER_SKIP);
 	spin_unlock_irq(&dev->power.lock);
 	return 0;

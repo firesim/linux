@@ -630,6 +630,8 @@ static void
 mlxsw_sp1_ptp_ht_gc_collect(struct mlxsw_sp_ptp_state *ptp_state,
 			    struct mlxsw_sp1_ptp_unmatched *unmatched)
 {
+	struct mlxsw_sp_ptp_port_dir_stats *stats;
+	struct mlxsw_sp_port *mlxsw_sp_port;
 	int err;
 
 	/* If an unmatched entry has an SKB, it has to be handed over to the
@@ -649,6 +651,17 @@ mlxsw_sp1_ptp_ht_gc_collect(struct mlxsw_sp_ptp_state *ptp_state,
 	if (err)
 		/* The packet was matched with timestamp during the walk. */
 		goto out;
+
+	mlxsw_sp_port = ptp_state->mlxsw_sp->ports[unmatched->key.local_port];
+	if (mlxsw_sp_port) {
+		stats = unmatched->key.ingress ?
+			&mlxsw_sp_port->ptp.stats.rx_gcd :
+			&mlxsw_sp_port->ptp.stats.tx_gcd;
+		if (unmatched->skb)
+			stats->packets++;
+		else
+			stats->timestamps++;
+	}
 
 	/* mlxsw_sp1_ptp_unmatched_finish() invokes netif_receive_skb(). While
 	 * the comment at that function states that it can only be called in
@@ -907,7 +920,10 @@ static int mlxsw_sp_ptp_get_message_types(const struct hwtstamp_config *config,
 		egr_types = 0xff;
 		break;
 	case HWTSTAMP_TX_ONESTEP_SYNC:
+	case HWTSTAMP_TX_ONESTEP_P2P:
 		return -ERANGE;
+	default:
+		return -EINVAL;
 	}
 
 	switch (rx_filter) {
@@ -938,6 +954,8 @@ static int mlxsw_sp_ptp_get_message_types(const struct hwtstamp_config *config,
 	case HWTSTAMP_FILTER_SOME:
 	case HWTSTAMP_FILTER_NTP_ALL:
 		return -ERANGE;
+	default:
+		return -EINVAL;
 	}
 
 	*p_ing_types = ing_types;
@@ -1002,27 +1020,17 @@ mlxsw_sp1_ptp_port_shaper_set(struct mlxsw_sp_port *mlxsw_sp_port, bool enable)
 
 static int mlxsw_sp1_ptp_port_shaper_check(struct mlxsw_sp_port *mlxsw_sp_port)
 {
-	const struct mlxsw_sp_port_type_speed_ops *port_type_speed_ops;
-	struct mlxsw_sp *mlxsw_sp = mlxsw_sp_port->mlxsw_sp;
-	char ptys_pl[MLXSW_REG_PTYS_LEN];
-	u32 eth_proto_oper, speed;
 	bool ptps = false;
 	int err, i;
+	u32 speed;
 
 	if (!mlxsw_sp1_ptp_hwtstamp_enabled(mlxsw_sp_port))
 		return mlxsw_sp1_ptp_port_shaper_set(mlxsw_sp_port, false);
 
-	port_type_speed_ops = mlxsw_sp->port_type_speed_ops;
-	port_type_speed_ops->reg_ptys_eth_pack(mlxsw_sp, ptys_pl,
-					       mlxsw_sp_port->local_port, 0,
-					       false);
-	err = mlxsw_reg_query(mlxsw_sp->core, MLXSW_REG(ptys), ptys_pl);
+	err = mlxsw_sp_port_speed_get(mlxsw_sp_port, &speed);
 	if (err)
 		return err;
-	port_type_speed_ops->reg_ptys_eth_unpack(mlxsw_sp, ptys_pl, NULL, NULL,
-						 &eth_proto_oper);
 
-	speed = port_type_speed_ops->from_ptys_speed(mlxsw_sp, eth_proto_oper);
 	for (i = 0; i < MLXSW_SP1_PTP_SHAPER_PARAMS_LEN; i++) {
 		if (mlxsw_sp1_ptp_shaper_params[i].ethtool_speed == speed) {
 			ptps = true;
@@ -1097,4 +1105,58 @@ int mlxsw_sp1_ptp_get_ts_info(struct mlxsw_sp *mlxsw_sp,
 			   BIT(HWTSTAMP_FILTER_ALL);
 
 	return 0;
+}
+
+struct mlxsw_sp_ptp_port_stat {
+	char str[ETH_GSTRING_LEN];
+	ptrdiff_t offset;
+};
+
+#define MLXSW_SP_PTP_PORT_STAT(NAME, FIELD)				\
+	{								\
+		.str = NAME,						\
+		.offset = offsetof(struct mlxsw_sp_ptp_port_stats,	\
+				    FIELD),				\
+	}
+
+static const struct mlxsw_sp_ptp_port_stat mlxsw_sp_ptp_port_stats[] = {
+	MLXSW_SP_PTP_PORT_STAT("ptp_rx_gcd_packets",    rx_gcd.packets),
+	MLXSW_SP_PTP_PORT_STAT("ptp_rx_gcd_timestamps", rx_gcd.timestamps),
+	MLXSW_SP_PTP_PORT_STAT("ptp_tx_gcd_packets",    tx_gcd.packets),
+	MLXSW_SP_PTP_PORT_STAT("ptp_tx_gcd_timestamps", tx_gcd.timestamps),
+};
+
+#undef MLXSW_SP_PTP_PORT_STAT
+
+#define MLXSW_SP_PTP_PORT_STATS_LEN \
+	ARRAY_SIZE(mlxsw_sp_ptp_port_stats)
+
+int mlxsw_sp1_get_stats_count(void)
+{
+	return MLXSW_SP_PTP_PORT_STATS_LEN;
+}
+
+void mlxsw_sp1_get_stats_strings(u8 **p)
+{
+	int i;
+
+	for (i = 0; i < MLXSW_SP_PTP_PORT_STATS_LEN; i++) {
+		memcpy(*p, mlxsw_sp_ptp_port_stats[i].str,
+		       ETH_GSTRING_LEN);
+		*p += ETH_GSTRING_LEN;
+	}
+}
+
+void mlxsw_sp1_get_stats(struct mlxsw_sp_port *mlxsw_sp_port,
+			 u64 *data, int data_index)
+{
+	void *stats = &mlxsw_sp_port->ptp.stats;
+	ptrdiff_t offset;
+	int i;
+
+	data += data_index;
+	for (i = 0; i < MLXSW_SP_PTP_PORT_STATS_LEN; i++) {
+		offset = mlxsw_sp_ptp_port_stats[i].offset;
+		*data++ = *(u64 *)(stats + offset);
+	}
 }

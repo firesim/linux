@@ -29,7 +29,7 @@ void nft_lookup_eval(const struct nft_expr *expr,
 {
 	const struct nft_lookup *priv = nft_expr_priv(expr);
 	const struct nft_set *set = priv->set;
-	const struct nft_set_ext *ext;
+	const struct nft_set_ext *ext = NULL;
 	bool found;
 
 	found = set->ops->lookup(nft_net(pkt), set, &regs->data[priv->sreg],
@@ -39,10 +39,13 @@ void nft_lookup_eval(const struct nft_expr *expr,
 		return;
 	}
 
-	if (set->flags & NFT_SET_MAP)
-		nft_data_copy(&regs->data[priv->dreg],
-			      nft_set_ext_data(ext), set->dlen);
+	if (ext) {
+		if (set->flags & NFT_SET_MAP)
+			nft_data_copy(&regs->data[priv->dreg],
+				      nft_set_ext_data(ext), set->dlen);
 
+		nft_set_elem_update_expr(ext, regs, pkt);
+	}
 }
 
 static const struct nla_policy nft_lookup_policy[NFTA_LOOKUP_MAX + 1] = {
@@ -72,9 +75,6 @@ static int nft_lookup_init(const struct nft_ctx *ctx,
 				    tb[NFTA_LOOKUP_SET_ID], genmask);
 	if (IS_ERR(set))
 		return PTR_ERR(set);
-
-	if (set->flags & NFT_SET_EVAL)
-		return -EOPNOTSUPP;
 
 	priv->sreg = nft_parse_register(tb[NFTA_LOOKUP_SREG]);
 	err = nft_validate_register_load(priv->sreg, set->klen);

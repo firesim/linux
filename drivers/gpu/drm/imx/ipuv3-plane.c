@@ -5,15 +5,16 @@
  * Copyright (C) 2013 Philipp Zabel, Pengutronix
  */
 
-#include <drm/drmP.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_fb_cma_helper.h>
+#include <drm/drm_fourcc.h>
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_plane_helper.h>
 
-#include "video/imx-ipu-v3.h"
+#include <video/imx-ipu-v3.h>
+
 #include "imx-drm.h"
 #include "ipuv3-plane.h"
 
@@ -358,7 +359,7 @@ static int ipu_plane_atomic_check(struct drm_plane *plane,
 	if (!fb)
 		return 0;
 
-	if (!state->crtc)
+	if (WARN_ON(!state->crtc))
 		return -EINVAL;
 
 	crtc_state =

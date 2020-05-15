@@ -86,6 +86,29 @@ else
 	fi
 fi
 
+# Try platform (EFI embedded fw) loading too
+if [ ! -e "$DIR"/trigger_request_platform ]; then
+	echo "$0: firmware loading: platform trigger not present, ignoring test" >&2
+else
+	if printf '\000' >"$DIR"/trigger_request_platform 2> /dev/null; then
+		echo "$0: empty filename should not succeed (platform)" >&2
+		exit 1
+	fi
+
+	# Note we echo a non-existing name, since files on the file-system
+	# are preferred over firmware embedded inside the platform's firmware
+	# The test adds a fake entry with the requested name to the platform's
+	# fw list, so the name does not matter as long as it does not exist
+	if ! echo -n "nope-$NAME" >"$DIR"/trigger_request_platform ; then
+		echo "$0: could not trigger request platform" >&2
+		exit 1
+	fi
+
+	# The test verifies itself that the loaded firmware contents matches
+	# the contents for the fake platform fw entry it added.
+	echo "$0: platform loading works"
+fi
+
 ### Batched requests tests
 test_config_present()
 {
@@ -114,6 +137,16 @@ release_all_firmware()
 config_set_name()
 {
 	echo -n $1 >  $DIR/config_name
+}
+
+config_set_into_buf()
+{
+	echo 1 >  $DIR/config_into_buf
+}
+
+config_unset_into_buf()
+{
+	echo 0 >  $DIR/config_into_buf
 }
 
 config_set_sync_direct()
@@ -153,10 +186,13 @@ config_set_read_fw_idx()
 
 read_firmwares()
 {
-	if [ "$1" = "xzonly" ]; then
-		fwfile="${FW}-orig"
+	if [ "$(cat $DIR/config_into_buf)" == "1" ]; then
+		fwfile="$FW_INTO_BUF"
 	else
 		fwfile="$FW"
+	fi
+	if [ "$1" = "xzonly" ]; then
+		fwfile="${fwfile}-orig"
 	fi
 	for i in $(seq 0 3); do
 		config_set_read_fw_idx $i
@@ -188,6 +224,18 @@ test_batched_request_firmware_nofile()
 	echo -n "Batched request_firmware() nofile try #$1: "
 	config_reset
 	config_set_name nope-test-firmware.bin
+	config_trigger_sync
+	read_firmwares_expect_nofile
+	release_all_firmware
+	echo "OK"
+}
+
+test_batched_request_firmware_into_buf_nofile()
+{
+	echo -n "Batched request_firmware_into_buf() nofile try #$1: "
+	config_reset
+	config_set_name nope-test-firmware.bin
+	config_set_into_buf
 	config_trigger_sync
 	read_firmwares_expect_nofile
 	release_all_firmware
@@ -259,6 +307,18 @@ test_batched_request_firmware()
 	echo "OK"
 }
 
+test_batched_request_firmware_into_buf()
+{
+	echo -n "Batched request_firmware_into_buf() $2 try #$1: "
+	config_reset
+	config_set_name $TEST_FIRMWARE_INTO_BUF_FILENAME
+	config_set_into_buf
+	config_trigger_sync
+	read_firmwares $2
+	release_all_firmware
+	echo "OK"
+}
+
 test_batched_request_firmware_direct()
 {
 	echo -n "Batched request_firmware_direct() $2 try #$1: "
@@ -308,6 +368,10 @@ for i in $(seq 1 5); do
 done
 
 for i in $(seq 1 5); do
+	test_batched_request_firmware_into_buf $i normal
+done
+
+for i in $(seq 1 5); do
 	test_batched_request_firmware_direct $i normal
 done
 
@@ -325,6 +389,10 @@ echo
 echo "Testing with the file missing..."
 for i in $(seq 1 5); do
 	test_batched_request_firmware_nofile $i
+done
+
+for i in $(seq 1 5); do
+	test_batched_request_firmware_into_buf_nofile $i
 done
 
 for i in $(seq 1 5); do
@@ -351,6 +419,10 @@ for i in $(seq 1 5); do
 done
 
 for i in $(seq 1 5); do
+	test_batched_request_firmware_into_buf $i both
+done
+
+for i in $(seq 1 5); do
 	test_batched_request_firmware_direct $i both
 done
 
@@ -368,6 +440,10 @@ echo
 echo "Testing with only xz file present..."
 for i in $(seq 1 5); do
 	test_batched_request_firmware $i xzonly
+done
+
+for i in $(seq 1 5); do
+	test_batched_request_firmware_into_buf $i xzonly
 done
 
 for i in $(seq 1 5); do

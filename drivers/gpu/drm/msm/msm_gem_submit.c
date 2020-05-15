@@ -4,7 +4,11 @@
  * Author: Rob Clark <robdclark@gmail.com>
  */
 
+#include <linux/file.h>
 #include <linux/sync_file.h>
+#include <linux/uaccess.h>
+
+#include <drm/drm_file.h>
 
 #include "msm_drv.h"
 #include "msm_gpu.h"
@@ -26,8 +30,8 @@ static struct msm_gem_submit *submit_create(struct drm_device *dev,
 		uint32_t nr_cmds)
 {
 	struct msm_gem_submit *submit;
-	uint64_t sz = sizeof(*submit) + ((u64)nr_bos * sizeof(submit->bos[0])) +
-		((u64)nr_cmds * sizeof(submit->cmd[0]));
+	uint64_t sz = struct_size(submit, bos, nr_bos) +
+				  ((u64)nr_cmds * sizeof(submit->cmd[0]));
 
 	if (sz > SIZE_MAX)
 		return NULL;
@@ -50,7 +54,6 @@ static struct msm_gem_submit *submit_create(struct drm_device *dev,
 
 	INIT_LIST_HEAD(&submit->node);
 	INIT_LIST_HEAD(&submit->bo_list);
-	ww_acquire_init(&submit->ticket, &reservation_ww_class);
 
 	return submit;
 }
@@ -154,7 +157,7 @@ static void submit_unlock_unpin_bo(struct msm_gem_submit *submit,
 		msm_gem_unpin_iova(&msm_obj->base, submit->aspace);
 
 	if (submit->bos[i].flags & BO_LOCKED)
-		ww_mutex_unlock(&msm_obj->base.resv->lock);
+		dma_resv_unlock(msm_obj->base.resv);
 
 	if (backoff && !(submit->bos[i].flags & BO_VALID))
 		submit->bos[i].iova = 0;
@@ -177,8 +180,8 @@ retry:
 		contended = i;
 
 		if (!(submit->bos[i].flags & BO_LOCKED)) {
-			ret = ww_mutex_lock_interruptible(&msm_obj->base.resv->lock,
-					&submit->ticket);
+			ret = dma_resv_lock_interruptible(msm_obj->base.resv,
+							  &submit->ticket);
 			if (ret)
 				goto fail;
 			submit->bos[i].flags |= BO_LOCKED;
@@ -199,8 +202,8 @@ fail:
 	if (ret == -EDEADLK) {
 		struct msm_gem_object *msm_obj = submit->bos[contended].obj;
 		/* we lost out in a seqno race, lock and retry.. */
-		ret = ww_mutex_lock_slow_interruptible(&msm_obj->base.resv->lock,
-				&submit->ticket);
+		ret = dma_resv_lock_slow_interruptible(msm_obj->base.resv,
+						       &submit->ticket);
 		if (!ret) {
 			submit->bos[contended].flags |= BO_LOCKED;
 			slow_locked = contended;
@@ -225,7 +228,7 @@ static int submit_fence_sync(struct msm_gem_submit *submit, bool no_implicit)
 			 * strange place to call it.  OTOH this is a
 			 * convenient can-fail point to hook it in.
 			 */
-			ret = reservation_object_reserve_shared(msm_obj->base.resv,
+			ret = dma_resv_reserve_shared(msm_obj->base.resv,
 								1);
 			if (ret)
 				return ret;
@@ -386,8 +389,6 @@ static void submit_cleanup(struct msm_gem_submit *submit)
 		list_del_init(&msm_obj->submit_entry);
 		drm_gem_object_put(&msm_obj->base);
 	}
-
-	ww_acquire_fini(&submit->ticket);
 }
 
 int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
@@ -404,6 +405,7 @@ int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
 	struct msm_ringbuffer *ring;
 	int out_fence_fd = -1;
 	struct pid *pid = get_pid(task_pid(current));
+	bool has_ww_ticket = false;
 	unsigned i;
 	int ret, submitid;
 	if (!gpu)
@@ -485,6 +487,9 @@ int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
 	if (ret)
 		goto out;
 
+	/* copy_*_user while holding a ww ticket upsets lockdep */
+	ww_acquire_init(&submit->ticket, &reservation_ww_class);
+	has_ww_ticket = true;
 	ret = submit_lock_objects(submit);
 	if (ret)
 		goto out;
@@ -584,6 +589,8 @@ int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
 
 out:
 	submit_cleanup(submit);
+	if (has_ww_ticket)
+		ww_acquire_fini(&submit->ticket);
 	if (ret)
 		msm_gem_submit_free(submit);
 out_unlock:

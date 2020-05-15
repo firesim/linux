@@ -142,13 +142,17 @@ struct sched_domain {
 	 * by attaching extra space to the end of the structure,
 	 * depending on how many CPUs the kernel has booted up with)
 	 */
-	unsigned long span[0];
+	unsigned long span[];
 };
 
 static inline struct cpumask *sched_domain_span(struct sched_domain *sd)
 {
 	return to_cpumask(sd->span);
 }
+
+extern void partition_sched_domains_locked(int ndoms_new,
+					   cpumask_var_t doms_new[],
+					   struct sched_domain_attr *dattr_new);
 
 extern void partition_sched_domains(int ndoms_new, cpumask_var_t doms_new[],
 				    struct sched_domain_attr *dattr_new);
@@ -195,6 +199,12 @@ extern void set_sched_topology(struct sched_domain_topology_level *tl);
 struct sched_domain_attr;
 
 static inline void
+partition_sched_domains_locked(int ndoms_new, cpumask_var_t doms_new[],
+			       struct sched_domain_attr *dattr_new)
+{
+}
+
+static inline void
 partition_sched_domains(int ndoms_new, cpumask_var_t doms_new[],
 			struct sched_domain_attr *dattr_new)
 {
@@ -212,6 +222,14 @@ static __always_inline
 unsigned long arch_scale_cpu_capacity(int cpu)
 {
 	return SCHED_CAPACITY_SCALE;
+}
+#endif
+
+#ifndef arch_scale_thermal_pressure
+static __always_inline
+unsigned long arch_scale_thermal_pressure(int cpu)
+{
+	return 0;
 }
 #endif
 

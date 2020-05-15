@@ -5,8 +5,6 @@
 #ifndef __ASM_FUTEX_H
 #define __ASM_FUTEX_H
 
-#ifdef __KERNEL__
-
 #include <linux/futex.h>
 #include <linux/uaccess.h>
 
@@ -50,7 +48,8 @@ arch_futex_atomic_op_inuser(int op, int oparg, int *oval, u32 __user *_uaddr)
 	int oldval = 0, ret, tmp;
 	u32 __user *uaddr = __uaccess_mask_ptr(_uaddr);
 
-	pagefault_disable();
+	if (!access_ok(_uaddr, sizeof(u32)))
+		return -EFAULT;
 
 	switch (op) {
 	case FUTEX_OP_SET:
@@ -76,8 +75,6 @@ arch_futex_atomic_op_inuser(int op, int oparg, int *oval, u32 __user *_uaddr)
 	default:
 		ret = -ENOSYS;
 	}
-
-	pagefault_enable();
 
 	if (!ret)
 		*oval = oldval;
@@ -129,5 +126,4 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *_uaddr,
 	return ret;
 }
 
-#endif /* __KERNEL__ */
 #endif /* __ASM_FUTEX_H */

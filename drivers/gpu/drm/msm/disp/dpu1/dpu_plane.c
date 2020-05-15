@@ -10,8 +10,10 @@
 #include <linux/debugfs.h>
 #include <linux/dma-buf.h>
 
-#include <drm/drm_damage_helper.h>
 #include <drm/drm_atomic_uapi.h>
+#include <drm/drm_damage_helper.h>
+#include <drm/drm_file.h>
+#include <drm/drm_gem_framebuffer_helper.h>
 
 #include "msm_drv.h"
 #include "dpu_kms.h"
@@ -51,8 +53,13 @@ enum {
 	R_MAX
 };
 
+/*
+ * Default Preload Values
+ */
 #define DPU_QSEED3_DEFAULT_PRELOAD_H 0x4
 #define DPU_QSEED3_DEFAULT_PRELOAD_V 0x3
+#define DPU_QSEED4_DEFAULT_PRELOAD_V 0x2
+#define DPU_QSEED4_DEFAULT_PRELOAD_H 0x4
 
 #define DEFAULT_REFRESH_RATE	60
 
@@ -475,8 +482,16 @@ static void _dpu_plane_setup_scaler3(struct dpu_plane *pdpu,
 			scale_cfg->src_width[i] /= chroma_subsmpl_h;
 			scale_cfg->src_height[i] /= chroma_subsmpl_v;
 		}
-		scale_cfg->preload_x[i] = DPU_QSEED3_DEFAULT_PRELOAD_H;
-		scale_cfg->preload_y[i] = DPU_QSEED3_DEFAULT_PRELOAD_V;
+
+		if (pdpu->pipe_hw->cap->features &
+			BIT(DPU_SSPP_SCALER_QSEED4)) {
+			scale_cfg->preload_x[i] = DPU_QSEED4_DEFAULT_PRELOAD_H;
+			scale_cfg->preload_y[i] = DPU_QSEED4_DEFAULT_PRELOAD_V;
+		} else {
+			scale_cfg->preload_x[i] = DPU_QSEED3_DEFAULT_PRELOAD_H;
+			scale_cfg->preload_y[i] = DPU_QSEED3_DEFAULT_PRELOAD_V;
+		}
+
 		pstate->pixel_ext.num_ext_pxls_top[i] =
 			scale_cfg->src_height[i];
 		pstate->pixel_ext.num_ext_pxls_left[i] =
@@ -736,7 +751,7 @@ done:
 	} else {
 		pstate[R0]->multirect_index = DPU_SSPP_RECT_0;
 		pstate[R1]->multirect_index = DPU_SSPP_RECT_1;
-	};
+	}
 
 	DPU_DEBUG_PLANE(dpu_plane[R0], "R0: %d - %d\n",
 		pstate[R0]->multirect_mode, pstate[R0]->multirect_index);
@@ -764,8 +779,6 @@ static int dpu_plane_prepare_fb(struct drm_plane *plane,
 	struct dpu_plane *pdpu = to_dpu_plane(plane);
 	struct dpu_plane_state *pstate = to_dpu_plane_state(new_state);
 	struct dpu_hw_fmt_layout layout;
-	struct drm_gem_object *obj;
-	struct dma_fence *fence;
 	struct dpu_kms *kms = _dpu_plane_get_kms(&pdpu->base);
 	int ret;
 
@@ -782,10 +795,7 @@ static int dpu_plane_prepare_fb(struct drm_plane *plane,
 	 *       we can use msm_atomic_prepare_fb() instead of doing the
 	 *       implicit fence and fb prepare by hand here.
 	 */
-	obj = msm_framebuffer_bo(new_state->fb, 0);
-	fence = reservation_object_get_excl_rcu(obj->resv);
-	if (fence)
-		drm_atomic_set_fence_for_plane(new_state, fence);
+	drm_gem_fb_prepare_fb(plane, new_state);
 
 	if (pstate->aspace) {
 		ret = msm_framebuffer_prepare(new_state->fb,
@@ -861,7 +871,7 @@ static int dpu_plane_atomic_check(struct drm_plane *plane,
 					  pdpu->pipe_sblk->maxupscale << 16,
 					  true, true);
 	if (ret) {
-		DPU_ERROR_PLANE(pdpu, "Check plane state failed (%d)\n", ret);
+		DPU_DEBUG_PLANE(pdpu, "Check plane state failed (%d)\n", ret);
 		return ret;
 	}
 	if (!state->visible)
@@ -887,13 +897,13 @@ static int dpu_plane_atomic_check(struct drm_plane *plane,
 		(!(pdpu->features & DPU_SSPP_SCALER) ||
 		 !(pdpu->features & (BIT(DPU_SSPP_CSC)
 		 | BIT(DPU_SSPP_CSC_10BIT))))) {
-		DPU_ERROR_PLANE(pdpu,
+		DPU_DEBUG_PLANE(pdpu,
 				"plane doesn't have scaler/csc for yuv\n");
 		return -EINVAL;
 
 	/* check src bounds */
 	} else if (!dpu_plane_validate_src(&src, &fb_rect, min_src_size)) {
-		DPU_ERROR_PLANE(pdpu, "invalid source " DRM_RECT_FMT "\n",
+		DPU_DEBUG_PLANE(pdpu, "invalid source " DRM_RECT_FMT "\n",
 				DRM_RECT_ARG(&src));
 		return -E2BIG;
 
@@ -902,19 +912,19 @@ static int dpu_plane_atomic_check(struct drm_plane *plane,
 		   (src.x1 & 0x1 || src.y1 & 0x1 ||
 		    drm_rect_width(&src) & 0x1 ||
 		    drm_rect_height(&src) & 0x1)) {
-		DPU_ERROR_PLANE(pdpu, "invalid yuv source " DRM_RECT_FMT "\n",
+		DPU_DEBUG_PLANE(pdpu, "invalid yuv source " DRM_RECT_FMT "\n",
 				DRM_RECT_ARG(&src));
 		return -EINVAL;
 
 	/* min dst support */
 	} else if (drm_rect_width(&dst) < 0x1 || drm_rect_height(&dst) < 0x1) {
-		DPU_ERROR_PLANE(pdpu, "invalid dest rect " DRM_RECT_FMT "\n",
+		DPU_DEBUG_PLANE(pdpu, "invalid dest rect " DRM_RECT_FMT "\n",
 				DRM_RECT_ARG(&dst));
 		return -EINVAL;
 
 	/* check decimated source width */
 	} else if (drm_rect_width(&src) > max_linewidth) {
-		DPU_ERROR_PLANE(pdpu, "invalid src " DRM_RECT_FMT " line:%u\n",
+		DPU_DEBUG_PLANE(pdpu, "invalid src " DRM_RECT_FMT " line:%u\n",
 				DRM_RECT_ARG(&src), max_linewidth);
 		return -E2BIG;
 	}
@@ -1040,7 +1050,20 @@ static void dpu_plane_sspp_atomic_update(struct drm_plane *plane)
 				pstate->multirect_mode);
 
 	if (pdpu->pipe_hw->ops.setup_format) {
+		unsigned int rotation;
+
 		src_flags = 0x0;
+
+		rotation = drm_rotation_simplify(state->rotation,
+						 DRM_MODE_ROTATE_0 |
+						 DRM_MODE_REFLECT_X |
+						 DRM_MODE_REFLECT_Y);
+
+		if (rotation & DRM_MODE_REFLECT_X)
+			src_flags |= DPU_SSPP_FLIP_LR;
+
+		if (rotation & DRM_MODE_REFLECT_Y)
+			src_flags |= DPU_SSPP_FLIP_UD;
 
 		/* update format */
 		pdpu->pipe_hw->ops.setup_format(pdpu->pipe_hw, fmt, src_flags,
@@ -1327,7 +1350,8 @@ static int _dpu_plane_init_debugfs(struct drm_plane *plane)
 			pdpu->debugfs_root, &pdpu->debugfs_src);
 
 	if (cfg->features & BIT(DPU_SSPP_SCALER_QSEED3) ||
-			cfg->features & BIT(DPU_SSPP_SCALER_QSEED2)) {
+			cfg->features & BIT(DPU_SSPP_SCALER_QSEED2) ||
+			cfg->features & BIT(DPU_SSPP_SCALER_QSEED4)) {
 		dpu_debugfs_setup_regset32(&pdpu->debugfs_scaler,
 				sblk->scaler_blk.base + cfg->base,
 				sblk->scaler_blk.len,
@@ -1521,6 +1545,13 @@ struct drm_plane *dpu_plane_init(struct drm_device *dev,
 	ret = drm_plane_create_zpos_property(plane, 0, 0, zpos_max);
 	if (ret)
 		DPU_ERROR("failed to install zpos property, rc = %d\n", ret);
+
+	drm_plane_create_rotation_property(plane,
+			DRM_MODE_ROTATE_0,
+			DRM_MODE_ROTATE_0 |
+			DRM_MODE_ROTATE_180 |
+			DRM_MODE_REFLECT_X |
+			DRM_MODE_REFLECT_Y);
 
 	drm_plane_enable_fb_damage_clips(plane);
 

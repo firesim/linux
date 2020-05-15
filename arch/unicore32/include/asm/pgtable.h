@@ -177,7 +177,6 @@ extern struct page *empty_zero_page;
 #define pte_dirty(pte)		(pte_val(pte) & PTE_DIRTY)
 #define pte_young(pte)		(pte_val(pte) & PTE_YOUNG)
 #define pte_exec(pte)		(pte_val(pte) & PTE_EXEC)
-#define pte_special(pte)	(0)
 
 #define PTE_BIT_FUNC(fn, op) \
 static inline pte_t pte_##fn(pte_t pte) { pte_val(pte) op; return pte; }
@@ -189,16 +188,12 @@ PTE_BIT_FUNC(mkdirty,   |= PTE_DIRTY);
 PTE_BIT_FUNC(mkold,     &= ~PTE_YOUNG);
 PTE_BIT_FUNC(mkyoung,   |= PTE_YOUNG);
 
-static inline pte_t pte_mkspecial(pte_t pte) { return pte; }
-
 /*
  * Mark the prot value as uncacheable.
  */
 #define pgprot_noncached(prot)		\
 	__pgprot(pgprot_val(prot) & ~PTE_CACHEABLE)
 #define pgprot_writecombine(prot)	\
-	__pgprot(pgprot_val(prot) & ~PTE_CACHEABLE)
-#define pgprot_dmacoherent(prot)	\
 	__pgprot(pgprot_val(prot) & ~PTE_CACHEABLE)
 
 #define pmd_none(pmd)		(!pmd_val(pmd))
@@ -286,8 +281,6 @@ extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
 #define kern_addr_valid(addr)	(1)
 
 #include <asm-generic/pgtable.h>
-
-#define pgtable_cache_init() do { } while (0)
 
 #endif /* !__ASSEMBLY__ */
 

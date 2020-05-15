@@ -24,7 +24,7 @@ static void bnx2fc_unmap_sg_list(struct bnx2fc_cmd *io_req);
 static void bnx2fc_free_mp_resc(struct bnx2fc_cmd *io_req);
 static void bnx2fc_parse_fcp_rsp(struct bnx2fc_cmd *io_req,
 				 struct fcoe_fcp_rsp_payload *fcp_rsp,
-				 u8 num_rq);
+				 u8 num_rq, unsigned char *rq_data);
 
 void bnx2fc_cmd_timer_set(struct bnx2fc_cmd *io_req,
 			  unsigned int timer_msec)
@@ -930,7 +930,6 @@ abts_err:
 int bnx2fc_initiate_seq_cleanup(struct bnx2fc_cmd *orig_io_req, u32 offset,
 				enum fc_rctl r_ctl)
 {
-	struct fc_lport *lport;
 	struct bnx2fc_rport *tgt = orig_io_req->tgt;
 	struct bnx2fc_interface *interface;
 	struct fcoe_port *port;
@@ -948,7 +947,6 @@ int bnx2fc_initiate_seq_cleanup(struct bnx2fc_cmd *orig_io_req, u32 offset,
 
 	port = orig_io_req->port;
 	interface = port->priv;
-	lport = port->lport;
 
 	cb_arg = kzalloc(sizeof(struct bnx2fc_els_cb_arg), GFP_ATOMIC);
 	if (!cb_arg) {
@@ -999,7 +997,6 @@ cleanup_err:
 
 int bnx2fc_initiate_cleanup(struct bnx2fc_cmd *io_req)
 {
-	struct fc_lport *lport;
 	struct bnx2fc_rport *tgt = io_req->tgt;
 	struct bnx2fc_interface *interface;
 	struct fcoe_port *port;
@@ -1015,7 +1012,6 @@ int bnx2fc_initiate_cleanup(struct bnx2fc_cmd *io_req)
 
 	port = io_req->port;
 	interface = port->priv;
-	lport = port->lport;
 
 	cleanup_io_req = bnx2fc_elstm_alloc(tgt, BNX2FC_CLEANUP);
 	if (!cleanup_io_req) {
@@ -1246,7 +1242,7 @@ int bnx2fc_eh_abort(struct scsi_cmnd *sc_cmd)
 
 	/* Wait 2 * RA_TOV + 1 to be sure timeout function hasn't fired */
 	time_left = wait_for_completion_timeout(&io_req->abts_done,
-						(2 * rp->r_a_tov + 1) * HZ);
+					msecs_to_jiffies(2 * rp->r_a_tov + 1));
 	if (time_left)
 		BNX2FC_IO_DBG(io_req,
 			      "Timed out in eh_abort waiting for abts_done");
@@ -1522,7 +1518,8 @@ static void bnx2fc_tgt_reset_cmpl(struct bnx2fc_cmd *io_req)
 }
 
 void bnx2fc_process_tm_compl(struct bnx2fc_cmd *io_req,
-			     struct fcoe_task_ctx_entry *task, u8 num_rq)
+			     struct fcoe_task_ctx_entry *task, u8 num_rq,
+				  unsigned char *rq_data)
 {
 	struct bnx2fc_mp_req *tm_req;
 	struct fc_frame_header *fc_hdr;
@@ -1561,7 +1558,7 @@ void bnx2fc_process_tm_compl(struct bnx2fc_cmd *io_req,
 	if (fc_hdr->fh_r_ctl == FC_RCTL_DD_CMD_STATUS) {
 		bnx2fc_parse_fcp_rsp(io_req,
 				     (struct fcoe_fcp_rsp_payload *)
-				     rsp_buf, num_rq);
+				     rsp_buf, num_rq, rq_data);
 		if (io_req->fcp_rsp_code == 0) {
 			/* TM successful */
 			if (tm_req->tm_flags & FCP_TMF_LUN_RESET)
@@ -1759,15 +1756,11 @@ void bnx2fc_build_fcp_cmnd(struct bnx2fc_cmd *io_req,
 
 static void bnx2fc_parse_fcp_rsp(struct bnx2fc_cmd *io_req,
 				 struct fcoe_fcp_rsp_payload *fcp_rsp,
-				 u8 num_rq)
+				 u8 num_rq, unsigned char *rq_data)
 {
 	struct scsi_cmnd *sc_cmd = io_req->sc_cmd;
-	struct bnx2fc_rport *tgt = io_req->tgt;
 	u8 rsp_flags = fcp_rsp->fcp_flags.flags;
 	u32 rq_buff_len = 0;
-	int i;
-	unsigned char *rq_data;
-	unsigned char *dummy;
 	int fcp_sns_len = 0;
 	int fcp_rsp_len = 0;
 
@@ -1813,14 +1806,6 @@ static void bnx2fc_parse_fcp_rsp(struct bnx2fc_cmd *io_req,
 			rq_buff_len =  num_rq * BNX2FC_RQ_BUF_SZ;
 		}
 
-		rq_data = bnx2fc_get_next_rqe(tgt, 1);
-
-		if (num_rq > 1) {
-			/* We do not need extra sense data */
-			for (i = 1; i < num_rq; i++)
-				dummy = bnx2fc_get_next_rqe(tgt, 1);
-		}
-
 		/* fetch fcp_rsp_code */
 		if ((fcp_rsp_len == 4) || (fcp_rsp_len == 8)) {
 			/* Only for task management function */
@@ -1841,9 +1826,6 @@ static void bnx2fc_parse_fcp_rsp(struct bnx2fc_cmd *io_req,
 		if (fcp_sns_len)
 			memcpy(sc_cmd->sense_buffer, rq_data, fcp_sns_len);
 
-		/* return RQ entries */
-		for (i = 0; i < num_rq; i++)
-			bnx2fc_return_rqe(tgt, 1);
 	}
 }
 
@@ -1922,13 +1904,12 @@ exit_qcmd:
 
 void bnx2fc_process_scsi_cmd_compl(struct bnx2fc_cmd *io_req,
 				   struct fcoe_task_ctx_entry *task,
-				   u8 num_rq)
+				   u8 num_rq, unsigned char *rq_data)
 {
 	struct fcoe_fcp_rsp_payload *fcp_rsp;
 	struct bnx2fc_rport *tgt = io_req->tgt;
 	struct scsi_cmnd *sc_cmd;
-	struct Scsi_Host *host;
-
+	u16 scope = 0, qualifier = 0;
 
 	/* scsi_cmd_cmpl is called with tgt lock held */
 
@@ -1936,6 +1917,12 @@ void bnx2fc_process_scsi_cmd_compl(struct bnx2fc_cmd *io_req,
 		/* we will not receive ABTS response for this IO */
 		BNX2FC_IO_DBG(io_req, "Timer context finished processing "
 			   "this scsi cmd\n");
+		if (test_and_clear_bit(BNX2FC_FLAG_IO_CLEANUP,
+				       &io_req->req_flags)) {
+			BNX2FC_IO_DBG(io_req,
+				      "Actual completion after cleanup request cleaning up\n");
+			bnx2fc_process_cleanup_compl(io_req, task, num_rq);
+		}
 		return;
 	}
 
@@ -1955,9 +1942,8 @@ void bnx2fc_process_scsi_cmd_compl(struct bnx2fc_cmd *io_req,
 		   &(task->rxwr_only.union_ctx.comp_info.fcp_rsp.payload);
 
 	/* parse fcp_rsp and obtain sense data from RQ if available */
-	bnx2fc_parse_fcp_rsp(io_req, fcp_rsp, num_rq);
+	bnx2fc_parse_fcp_rsp(io_req, fcp_rsp, num_rq, rq_data);
 
-	host = sc_cmd->device->host;
 	if (!sc_cmd->SCp.ptr) {
 		printk(KERN_ERR PFX "SCp.ptr is NULL\n");
 		return;
@@ -1997,12 +1983,30 @@ void bnx2fc_process_scsi_cmd_compl(struct bnx2fc_cmd *io_req,
 
 			if (io_req->cdb_status == SAM_STAT_TASK_SET_FULL ||
 			    io_req->cdb_status == SAM_STAT_BUSY) {
-				/* Set the jiffies + retry_delay_timer * 100ms
-				   for the rport/tgt */
-				tgt->retry_delay_timestamp = jiffies +
-					fcp_rsp->retry_delay_timer * HZ / 10;
+				/* Newer array firmware with BUSY or
+				 * TASK_SET_FULL may return a status that needs
+				 * the scope bits masked.
+				 * Or a huge delay timestamp up to 27 minutes
+				 * can result.
+				 */
+				if (fcp_rsp->retry_delay_timer) {
+					/* Upper 2 bits */
+					scope = fcp_rsp->retry_delay_timer
+						& 0xC000;
+					/* Lower 14 bits */
+					qualifier = fcp_rsp->retry_delay_timer
+						& 0x3FFF;
+				}
+				if (scope > 0 && qualifier > 0 &&
+					qualifier <= 0x3FEF) {
+					/* Set the jiffies +
+					 * retry_delay_timer * 100ms
+					 * for the rport/tgt
+					 */
+					tgt->retry_delay_timestamp = jiffies +
+						(qualifier * HZ / 10);
+				}
 			}
-
 		}
 		if (io_req->fcp_resid)
 			scsi_set_resid(sc_cmd, io_req->fcp_resid);

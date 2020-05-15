@@ -279,6 +279,21 @@ static inline bool invalid_phys_cpuid(phys_cpuid_t phys_id)
 
 /* Validate the processor object's proc_id */
 bool acpi_duplicate_processor_id(int proc_id);
+/* Processor _CTS control */
+struct acpi_processor_power;
+
+#ifdef CONFIG_ACPI_PROCESSOR_CSTATE
+bool acpi_processor_claim_cst_control(void);
+int acpi_processor_evaluate_cst(acpi_handle handle, u32 cpu,
+				struct acpi_processor_power *info);
+#else
+static inline bool acpi_processor_claim_cst_control(void) { return false; }
+static inline int acpi_processor_evaluate_cst(acpi_handle handle, u32 cpu,
+					      struct acpi_processor_power *info)
+{
+	return -ENODEV;
+}
+#endif
 
 #ifdef CONFIG_ACPI_HOTPLUG_CPU
 /* Arch dependent functions for cpu hotplug support */
@@ -401,9 +416,30 @@ extern void acpi_osi_setup(char *str);
 extern bool acpi_osi_is_win8(void);
 
 #ifdef CONFIG_ACPI_NUMA
-int acpi_map_pxm_to_online_node(int pxm);
 int acpi_map_pxm_to_node(int pxm);
 int acpi_get_node(acpi_handle handle);
+
+/**
+ * acpi_map_pxm_to_online_node - Map proximity ID to online node
+ * @pxm: ACPI proximity ID
+ *
+ * This is similar to acpi_map_pxm_to_node(), but always returns an online
+ * node.  When the mapped node from a given proximity ID is offline, it
+ * looks up the node distance table and returns the nearest online node.
+ *
+ * ACPI device drivers, which are called after the NUMA initialization has
+ * completed in the kernel, can call this interface to obtain their device
+ * NUMA topology from ACPI tables.  Such drivers do not have to deal with
+ * offline nodes.  A node may be offline when a device proximity ID is
+ * unique, SRAT memory entry does not exist, or NUMA is disabled, ex.
+ * "numa=off" on x86.
+ */
+static inline int acpi_map_pxm_to_online_node(int pxm)
+{
+	int node = acpi_map_pxm_to_node(pxm);
+
+	return numa_map_to_online_node(node);
+}
 #else
 static inline int acpi_map_pxm_to_online_node(int pxm)
 {
@@ -473,6 +509,11 @@ void __init acpi_nvs_nosave_s3(void);
 void __init acpi_sleep_no_blacklist(void);
 #endif /* CONFIG_PM_SLEEP */
 
+int acpi_register_wakeup_handler(
+	int wake_irq, bool (*wakeup)(void *context), void *context);
+void acpi_unregister_wakeup_handler(
+	bool (*wakeup)(void *context), void *context);
+
 struct acpi_osc_context {
 	char *uuid_str;			/* UUID string */
 	int rev;
@@ -515,8 +556,9 @@ extern bool osc_pc_lpi_support_confirmed;
 #define OSC_PCI_CLOCK_PM_SUPPORT		0x00000004
 #define OSC_PCI_SEGMENT_GROUPS_SUPPORT		0x00000008
 #define OSC_PCI_MSI_SUPPORT			0x00000010
+#define OSC_PCI_EDR_SUPPORT			0x00000080
 #define OSC_PCI_HPX_TYPE_3_SUPPORT		0x00000100
-#define OSC_PCI_SUPPORT_MASKS			0x0000011f
+#define OSC_PCI_SUPPORT_MASKS			0x0000019f
 
 /* PCI Host Bridge _OSC: Capabilities DWORD 3: Control Field */
 #define OSC_PCI_EXPRESS_NATIVE_HP_CONTROL	0x00000001
@@ -525,7 +567,8 @@ extern bool osc_pc_lpi_support_confirmed;
 #define OSC_PCI_EXPRESS_AER_CONTROL		0x00000008
 #define OSC_PCI_EXPRESS_CAPABILITY_CONTROL	0x00000010
 #define OSC_PCI_EXPRESS_LTR_CONTROL		0x00000020
-#define OSC_PCI_CONTROL_MASKS			0x0000003f
+#define OSC_PCI_EXPRESS_DPC_CONTROL		0x00000080
+#define OSC_PCI_CONTROL_MASKS			0x000000bf
 
 #define ACPI_GSB_ACCESS_ATTRIB_QUICK		0x00000002
 #define ACPI_GSB_ACCESS_ATTRIB_SEND_RCV         0x00000004
@@ -643,6 +686,12 @@ bool acpi_gtdt_c3stop(int type);
 int acpi_arch_timer_mem_init(struct arch_timer_mem *timer_mem, int *timer_count);
 #endif
 
+#ifndef ACPI_HAVE_ARCH_SET_ROOT_POINTER
+static inline void acpi_arch_set_root_pointer(u64 addr)
+{
+}
+#endif
+
 #ifndef ACPI_HAVE_ARCH_GET_ROOT_POINTER
 static inline u64 acpi_arch_get_root_pointer(void)
 {
@@ -668,6 +717,14 @@ static inline bool acpi_dev_found(const char *hid)
 }
 
 static inline bool acpi_dev_present(const char *hid, const char *uid, s64 hrv)
+{
+	return false;
+}
+
+struct acpi_device;
+
+static inline bool
+acpi_dev_hid_uid_match(struct acpi_device *adev, const char *hid2, const char *uid2)
 {
 	return false;
 }
@@ -931,6 +988,8 @@ int acpi_subsys_suspend_noirq(struct device *dev);
 int acpi_subsys_suspend(struct device *dev);
 int acpi_subsys_freeze(struct device *dev);
 int acpi_subsys_poweroff(struct device *dev);
+void acpi_ec_mark_gpe_for_wake(void);
+void acpi_ec_set_gpe_wake_mask(u8 action);
 #else
 static inline int acpi_subsys_prepare(struct device *dev) { return 0; }
 static inline void acpi_subsys_complete(struct device *dev) {}
@@ -939,6 +998,8 @@ static inline int acpi_subsys_suspend_noirq(struct device *dev) { return 0; }
 static inline int acpi_subsys_suspend(struct device *dev) { return 0; }
 static inline int acpi_subsys_freeze(struct device *dev) { return 0; }
 static inline int acpi_subsys_poweroff(struct device *dev) { return 0; }
+static inline void acpi_ec_mark_gpe_for_wake(void) {}
+static inline void acpi_ec_set_gpe_wake_mask(u8 action) {}
 #endif
 
 #ifdef CONFIG_ACPI
@@ -994,62 +1055,11 @@ void __acpi_handle_debug(struct _ddebug *descriptor, acpi_handle handle, const c
 #endif
 #endif
 
-struct acpi_gpio_params {
-	unsigned int crs_entry_index;
-	unsigned int line_index;
-	bool active_low;
-};
-
-struct acpi_gpio_mapping {
-	const char *name;
-	const struct acpi_gpio_params *data;
-	unsigned int size;
-
-/* Ignore IoRestriction field */
-#define ACPI_GPIO_QUIRK_NO_IO_RESTRICTION	BIT(0)
-/*
- * When ACPI GPIO mapping table is in use the index parameter inside it
- * refers to the GPIO resource in _CRS method. That index has no
- * distinction of actual type of the resource. When consumer wants to
- * get GpioIo type explicitly, this quirk may be used.
- */
-#define ACPI_GPIO_QUIRK_ONLY_GPIOIO		BIT(1)
-
-	unsigned int quirks;
-};
-
 #if defined(CONFIG_ACPI) && defined(CONFIG_GPIOLIB)
-int acpi_dev_add_driver_gpios(struct acpi_device *adev,
-			      const struct acpi_gpio_mapping *gpios);
-
-static inline void acpi_dev_remove_driver_gpios(struct acpi_device *adev)
-{
-	if (adev)
-		adev->driver_gpios = NULL;
-}
-
-int devm_acpi_dev_add_driver_gpios(struct device *dev,
-				   const struct acpi_gpio_mapping *gpios);
-void devm_acpi_dev_remove_driver_gpios(struct device *dev);
-
 bool acpi_gpio_get_irq_resource(struct acpi_resource *ares,
 				struct acpi_resource_gpio **agpio);
 int acpi_dev_gpio_irq_get(struct acpi_device *adev, int index);
 #else
-static inline int acpi_dev_add_driver_gpios(struct acpi_device *adev,
-			      const struct acpi_gpio_mapping *gpios)
-{
-	return -ENXIO;
-}
-static inline void acpi_dev_remove_driver_gpios(struct acpi_device *adev) {}
-
-static inline int devm_acpi_dev_add_driver_gpios(struct device *dev,
-			      const struct acpi_gpio_mapping *gpios)
-{
-	return -ENXIO;
-}
-static inline void devm_acpi_dev_remove_driver_gpios(struct device *dev) {}
-
 static inline bool acpi_gpio_get_irq_resource(struct acpi_resource *ares,
 					      struct acpi_resource_gpio **agpio)
 {
@@ -1302,11 +1312,16 @@ static inline int lpit_read_residency_count_address(u64 *address)
 #endif
 
 #ifdef CONFIG_ACPI_PPTT
+int acpi_pptt_cpu_is_thread(unsigned int cpu);
 int find_acpi_cpu_topology(unsigned int cpu, int level);
 int find_acpi_cpu_topology_package(unsigned int cpu);
 int find_acpi_cpu_topology_hetero_id(unsigned int cpu);
 int find_acpi_cpu_cache_topology(unsigned int cpu, int level);
 #else
+static inline int acpi_pptt_cpu_is_thread(unsigned int cpu)
+{
+	return -EINVAL;
+}
 static inline int find_acpi_cpu_topology(unsigned int cpu, int level)
 {
 	return -EINVAL;

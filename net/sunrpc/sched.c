@@ -204,10 +204,6 @@ static void __rpc_add_wait_queue(struct rpc_wait_queue *queue,
 		struct rpc_task *task,
 		unsigned char queue_priority)
 {
-	WARN_ON_ONCE(RPC_IS_QUEUED(task));
-	if (RPC_IS_QUEUED(task))
-		return;
-
 	INIT_LIST_HEAD(&task->u.tk_wait.timer_list);
 	if (RPC_IS_PRIORITY(queue))
 		__rpc_add_wait_queue_priority(queue, task, queue_priority);
@@ -260,7 +256,7 @@ static void __rpc_init_priority_wait_queue(struct rpc_wait_queue *queue, const c
 	rpc_reset_waitqueue_priority(queue);
 	queue->qlen = 0;
 	queue->timer_list.expires = 0;
-	INIT_DEFERRABLE_WORK(&queue->timer_list.dwork, __rpc_queue_timer_fn);
+	INIT_DELAYED_WORK(&queue->timer_list.dwork, __rpc_queue_timer_fn);
 	INIT_LIST_HEAD(&queue->timer_list.list);
 	rpc_assign_waitqueue_name(queue, qname);
 }
@@ -382,7 +378,7 @@ static void rpc_make_runnable(struct workqueue_struct *wq,
  * NB: An RPC task will only receive interrupt-driven events as long
  * as it's on a wait queue.
  */
-static void __rpc_sleep_on_priority(struct rpc_wait_queue *q,
+static void __rpc_do_sleep_on_priority(struct rpc_wait_queue *q,
 		struct rpc_task *task,
 		unsigned char queue_priority)
 {
@@ -395,12 +391,23 @@ static void __rpc_sleep_on_priority(struct rpc_wait_queue *q,
 
 }
 
+static void __rpc_sleep_on_priority(struct rpc_wait_queue *q,
+		struct rpc_task *task,
+		unsigned char queue_priority)
+{
+	if (WARN_ON_ONCE(RPC_IS_QUEUED(task)))
+		return;
+	__rpc_do_sleep_on_priority(q, task, queue_priority);
+}
+
 static void __rpc_sleep_on_priority_timeout(struct rpc_wait_queue *q,
 		struct rpc_task *task, unsigned long timeout,
 		unsigned char queue_priority)
 {
+	if (WARN_ON_ONCE(RPC_IS_QUEUED(task)))
+		return;
 	if (time_is_after_jiffies(timeout)) {
-		__rpc_sleep_on_priority(q, task, queue_priority);
+		__rpc_do_sleep_on_priority(q, task, queue_priority);
 		__rpc_add_timer(q, task, timeout);
 	} else
 		task->tk_status = -ETIMEDOUT;
@@ -541,33 +548,14 @@ rpc_wake_up_task_on_wq_queue_action_locked(struct workqueue_struct *wq,
 	return NULL;
 }
 
-static void
-rpc_wake_up_task_on_wq_queue_locked(struct workqueue_struct *wq,
-		struct rpc_wait_queue *queue, struct rpc_task *task)
-{
-	rpc_wake_up_task_on_wq_queue_action_locked(wq, queue, task, NULL, NULL);
-}
-
 /*
  * Wake up a queued task while the queue lock is being held
  */
-static void rpc_wake_up_task_queue_locked(struct rpc_wait_queue *queue, struct rpc_task *task)
+static void rpc_wake_up_task_queue_locked(struct rpc_wait_queue *queue,
+					  struct rpc_task *task)
 {
-	rpc_wake_up_task_on_wq_queue_locked(rpciod_workqueue, queue, task);
-}
-
-/*
- * Wake up a task on a specific queue
- */
-void rpc_wake_up_queued_task_on_wq(struct workqueue_struct *wq,
-		struct rpc_wait_queue *queue,
-		struct rpc_task *task)
-{
-	if (!RPC_IS_QUEUED(task))
-		return;
-	spin_lock(&queue->lock);
-	rpc_wake_up_task_on_wq_queue_locked(wq, queue, task);
-	spin_unlock(&queue->lock);
+	rpc_wake_up_task_on_wq_queue_action_locked(rpciod_workqueue, queue,
+						   task, NULL, NULL);
 }
 
 /*
@@ -843,6 +831,7 @@ rpc_reset_task_statistics(struct rpc_task *task)
  */
 void rpc_exit_task(struct rpc_task *task)
 {
+	trace_rpc_task_end(task, task->tk_action);
 	task->tk_action = NULL;
 	if (task->tk_ops->rpc_count_stats)
 		task->tk_ops->rpc_count_stats(task, task->tk_calldata);
@@ -864,6 +853,8 @@ void rpc_signal_task(struct rpc_task *task)
 
 	if (!RPC_IS_ACTIVATED(task))
 		return;
+
+	trace_rpc_task_signalled(task, task->tk_action);
 	set_bit(RPC_TASK_SIGNALLED, &task->tk_runstate);
 	smp_mb__after_atomic();
 	queue = READ_ONCE(task->tk_waitqueue);
@@ -930,8 +921,10 @@ static void __rpc_execute(struct rpc_task *task)
 		/*
 		 * Signalled tasks should exit rather than sleep.
 		 */
-		if (RPC_SIGNALLED(task))
+		if (RPC_SIGNALLED(task)) {
+			task->tk_rpc_status = -ERESTARTSYS;
 			rpc_exit(task, -ERESTARTSYS);
+		}
 
 		/*
 		 * The queue->lock protects against races with
@@ -965,8 +958,9 @@ static void __rpc_execute(struct rpc_task *task)
 			 * clean up after sleeping on some queue, we don't
 			 * break the loop here, but go around once more.
 			 */
-			dprintk("RPC: %5u got signal\n", task->tk_pid);
+			trace_rpc_task_signalled(task, task->tk_action);
 			set_bit(RPC_TASK_SIGNALLED, &task->tk_runstate);
+			task->tk_rpc_status = -ERESTARTSYS;
 			rpc_exit(task, -ERESTARTSYS);
 		}
 		dprintk("RPC: %5u sync task resuming\n", task->tk_pid);
@@ -1175,7 +1169,8 @@ static void rpc_release_resources_task(struct rpc_task *task)
 {
 	xprt_release(task);
 	if (task->tk_msg.rpc_cred) {
-		put_cred(task->tk_msg.rpc_cred);
+		if (!(task->tk_flags & RPC_TASK_CRED_NOREF))
+			put_cred(task->tk_msg.rpc_cred);
 		task->tk_msg.rpc_cred = NULL;
 	}
 	rpc_task_release_client(task);

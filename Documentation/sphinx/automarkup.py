@@ -5,8 +5,13 @@
 # has been done.
 #
 from docutils import nodes
+import sphinx
 from sphinx import addnodes
-from sphinx.environment import NoUri
+if sphinx.version_info[0] < 2 or \
+   sphinx.version_info[0] == 2 and sphinx.version_info[1] < 1:
+    from sphinx.environment import NoUri
+else:
+    from sphinx.errors import NoUri
 import re
 
 #
@@ -25,8 +30,9 @@ RE_function = re.compile(r'([\w_][\w\d_]+\(\))')
 # to the creation of incorrect and confusing cross references.  So
 # just don't even try with these names.
 #
-Skipfuncs = [ 'open', 'close', 'read', 'write', 'fcntl', 'mmap'
-              'select', 'poll', 'fork', 'execve', 'clone', 'ioctl']
+Skipfuncs = [ 'open', 'close', 'read', 'write', 'fcntl', 'mmap',
+              'select', 'poll', 'fork', 'execve', 'clone', 'ioctl',
+              'socket' ]
 
 #
 # Find all occurrences of function() and try to replace them with

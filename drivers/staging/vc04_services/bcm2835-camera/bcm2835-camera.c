@@ -60,6 +60,9 @@ MODULE_PARM_DESC(max_video_width, "Threshold for video mode");
 module_param(max_video_height, int, 0644);
 MODULE_PARM_DESC(max_video_height, "Threshold for video mode");
 
+/* camera instance counter */
+static atomic_t camera_instance = ATOMIC_INIT(0);
+
 /* global device data array */
 static struct bm2835_mmal_dev *gdev[MAX_BCM2835_CAMERAS];
 
@@ -75,34 +78,27 @@ static const struct v4l2_fract
 /* video formats */
 static struct mmal_fmt formats[] = {
 	{
-		.name = "4:2:0, planar, YUV",
 		.fourcc = V4L2_PIX_FMT_YUV420,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_I420,
 		.depth = 12,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 1,
 		.remove_padding = 1,
 	}, {
-		.name = "4:2:2, packed, YUYV",
 		.fourcc = V4L2_PIX_FMT_YUYV,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_YUYV,
 		.depth = 16,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 2,
 		.remove_padding = 0,
 	}, {
-		.name = "RGB24 (LE)",
 		.fourcc = V4L2_PIX_FMT_RGB24,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_RGB24,
 		.depth = 24,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 3,
 		.remove_padding = 0,
 	}, {
-		.name = "JPEG",
 		.fourcc = V4L2_PIX_FMT_JPEG,
 		.flags = V4L2_FMT_FLAG_COMPRESSED,
 		.mmal = MMAL_ENCODING_JPEG,
@@ -111,7 +107,6 @@ static struct mmal_fmt formats[] = {
 		.ybbp = 0,
 		.remove_padding = 0,
 	}, {
-		.name = "H264",
 		.fourcc = V4L2_PIX_FMT_H264,
 		.flags = V4L2_FMT_FLAG_COMPRESSED,
 		.mmal = MMAL_ENCODING_H264,
@@ -120,7 +115,6 @@ static struct mmal_fmt formats[] = {
 		.ybbp = 0,
 		.remove_padding = 0,
 	}, {
-		.name = "MJPEG",
 		.fourcc = V4L2_PIX_FMT_MJPEG,
 		.flags = V4L2_FMT_FLAG_COMPRESSED,
 		.mmal = MMAL_ENCODING_MJPEG,
@@ -129,72 +123,56 @@ static struct mmal_fmt formats[] = {
 		.ybbp = 0,
 		.remove_padding = 0,
 	}, {
-		.name = "4:2:2, packed, YVYU",
 		.fourcc = V4L2_PIX_FMT_YVYU,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_YVYU,
 		.depth = 16,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 2,
 		.remove_padding = 0,
 	}, {
-		.name = "4:2:2, packed, VYUY",
 		.fourcc = V4L2_PIX_FMT_VYUY,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_VYUY,
 		.depth = 16,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 2,
 		.remove_padding = 0,
 	}, {
-		.name = "4:2:2, packed, UYVY",
 		.fourcc = V4L2_PIX_FMT_UYVY,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_UYVY,
 		.depth = 16,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 2,
 		.remove_padding = 0,
 	}, {
-		.name = "4:2:0, planar, NV12",
 		.fourcc = V4L2_PIX_FMT_NV12,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_NV12,
 		.depth = 12,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 1,
 		.remove_padding = 1,
 	}, {
-		.name = "RGB24 (BE)",
 		.fourcc = V4L2_PIX_FMT_BGR24,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_BGR24,
 		.depth = 24,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 3,
 		.remove_padding = 0,
 	}, {
-		.name = "4:2:0, planar, YVU",
 		.fourcc = V4L2_PIX_FMT_YVU420,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_YV12,
 		.depth = 12,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 1,
 		.remove_padding = 1,
 	}, {
-		.name = "4:2:0, planar, NV21",
 		.fourcc = V4L2_PIX_FMT_NV21,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_NV21,
 		.depth = 12,
 		.mmal_component = COMP_CAMERA,
 		.ybbp = 1,
 		.remove_padding = 1,
 	}, {
-		.name = "RGB32 (BE)",
 		.fourcc = V4L2_PIX_FMT_BGR32,
-		.flags = 0,
 		.mmal = MMAL_ENCODING_BGRA,
 		.depth = 32,
 		.mmal_component = COMP_CAMERA,
@@ -716,9 +694,7 @@ static int vidioc_enum_fmt_vid_overlay(struct file *file, void *priv,
 
 	fmt = &formats[f->index];
 
-	strlcpy((char *)f->description, fmt->name, sizeof(f->description));
 	f->pixelformat = fmt->fourcc;
-	f->flags = fmt->flags;
 
 	return 0;
 }
@@ -919,9 +895,7 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv,
 
 	fmt = &formats[f->index];
 
-	strlcpy((char *)f->description, fmt->name, sizeof(f->description));
 	f->pixelformat = fmt->fourcc;
-	f->flags = fmt->flags;
 
 	return 0;
 }
@@ -1119,8 +1093,8 @@ static int mmal_setup_components(struct bm2835_mmal_dev *dev,
 
 	ret = vchiq_mmal_port_set_format(dev->instance, camera_port);
 
-	if (!ret
-	    && camera_port ==
+	if (!ret &&
+	    camera_port ==
 	    &dev->component[COMP_CAMERA]->output[CAM_PORT_VIDEO]) {
 		bool overlay_enabled =
 		    !!dev->component[COMP_PREVIEW]->enabled;
@@ -1802,7 +1776,7 @@ static int bm2835_mmal_init_device(struct bm2835_mmal_dev *dev,
 	video_set_drvdata(vfd, dev);
 
 	ret = video_register_device(vfd,
-				    VFL_TYPE_GRABBER,
+				    VFL_TYPE_VIDEO,
 				    video_nr[dev->camera_num]);
 	if (ret < 0)
 		return ret;
@@ -1899,7 +1873,6 @@ static int bcm2835_mmal_probe(struct platform_device *pdev)
 
 		/* v4l2 core mutex used to protect all fops and v4l2 ioctls. */
 		mutex_init(&dev->mutex);
-		dev->camera_num = camera;
 		dev->max_width = resolutions[camera][0];
 		dev->max_height = resolutions[camera][1];
 
@@ -1915,8 +1888,9 @@ static int bcm2835_mmal_probe(struct platform_device *pdev)
 		dev->capture.fmt = &formats[3]; /* JPEG */
 
 		/* v4l device registration */
-		snprintf(dev->v4l2_dev.name, sizeof(dev->v4l2_dev.name),
-			 "%s", BM2835_MMAL_MODULE_NAME);
+		dev->camera_num = v4l2_device_set_name(&dev->v4l2_dev,
+						       BM2835_MMAL_MODULE_NAME,
+						       &camera_instance);
 		ret = v4l2_device_register(NULL, &dev->v4l2_dev);
 		if (ret) {
 			dev_err(&pdev->dev, "%s: could not register V4L2 device: %d\n",

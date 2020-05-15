@@ -322,10 +322,10 @@ static int acpi_pci_link_set(struct acpi_pci_link *link, int irq)
 		resource->res.data.extended_irq.polarity =
 		    link->irq.polarity;
 		if (link->irq.triggering == ACPI_EDGE_SENSITIVE)
-			resource->res.data.irq.shareable =
+			resource->res.data.extended_irq.shareable =
 			    ACPI_EXCLUSIVE;
 		else
-			resource->res.data.irq.shareable = ACPI_SHARED;
+			resource->res.data.extended_irq.shareable = ACPI_SHARED;
 		resource->res.data.extended_irq.interrupt_count = 1;
 		resource->res.data.extended_irq.interrupts[0] = irq;
 		/* ignore resource_source, it's optional */
@@ -661,7 +661,7 @@ int acpi_pci_link_allocate_irq(acpi_handle handle, int index, int *triggering,
 	ACPI_DEBUG_PRINT((ACPI_DB_INFO,
 			  "Link %s is referenced\n",
 			  acpi_device_bid(link->device)));
-	return (link->irq.active);
+	return link->irq.active;
 }
 
 /*
@@ -712,7 +712,7 @@ int acpi_pci_link_free_irq(acpi_handle handle)
 		acpi_evaluate_object(link->device->handle, "_DIS", NULL, NULL);
 
 	mutex_unlock(&acpi_link_lock);
-	return (link->irq.active);
+	return link->irq.active;
 }
 
 /* --------------------------------------------------------------------------

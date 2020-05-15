@@ -6,6 +6,7 @@ ARM64 Architecture
     :maxdepth: 1
 
     acpi_object_usage
+    amu
     arm-acpi
     booting
     cpu-feature-registers
@@ -16,6 +17,7 @@ ARM64 Architecture
     pointer-authentication
     silicon-errata
     sve
+    tagged-address-abi
     tagged-pointers
 
 .. only::  subproject and html

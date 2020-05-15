@@ -7,11 +7,13 @@
 #include <linux/clk.h>
 #include <linux/component.h>
 #include <linux/mfd/syscon.h>
+#include <linux/module.h>
+#include <linux/platform_device.h>
 #include <linux/regmap.h>
 
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
-#include <drm/drmP.h>
 
 #include "zx_drm_drv.h"
 #include "zx_vga_regs.h"
@@ -163,8 +165,10 @@ static int zx_vga_register(struct drm_device *drm, struct zx_vga *vga)
 
 	vga->connector.polled = DRM_CONNECTOR_POLL_HPD;
 
-	ret = drm_connector_init(drm, connector, &zx_vga_connector_funcs,
-				 DRM_MODE_CONNECTOR_VGA);
+	ret = drm_connector_init_with_ddc(drm, connector,
+					  &zx_vga_connector_funcs,
+					  DRM_MODE_CONNECTOR_VGA,
+					  &vga->ddc->adap);
 	if (ret) {
 		DRM_DEV_ERROR(dev, "failed to init connector: %d\n", ret);
 		goto clean_encoder;

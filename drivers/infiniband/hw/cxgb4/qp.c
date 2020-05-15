@@ -1948,10 +1948,10 @@ int c4iw_modify_qp(struct c4iw_dev *rhp, struct c4iw_qp *qhp,
 			qhp->attr.layer_etype = attrs->layer_etype;
 			qhp->attr.ecode = attrs->ecode;
 			ep = qhp->ep;
-			c4iw_get_ep(&ep->com);
-			disconnect = 1;
 			if (!internal) {
+				c4iw_get_ep(&ep->com);
 				terminate = 1;
+				disconnect = 1;
 			} else {
 				terminate = qhp->attr.send_term;
 				ret = rdma_fini(rhp, qhp, ep);
@@ -2127,7 +2127,7 @@ struct ib_qp *c4iw_create_qp(struct ib_pd *pd, struct ib_qp_init_attr *attrs,
 	pr_debug("ib_pd %p\n", pd);
 
 	if (attrs->qp_type != IB_QPT_RC)
-		return ERR_PTR(-EINVAL);
+		return ERR_PTR(-EOPNOTSUPP);
 
 	php = to_c4iw_pd(pd);
 	rhp = php->rhp;
@@ -2737,15 +2737,11 @@ int c4iw_create_srq(struct ib_srq *ib_srq, struct ib_srq_init_attr *attrs,
 	if (CHELSIO_CHIP_VERSION(rhp->rdev.lldi.adapter_type) > CHELSIO_T6)
 		srq->flags = T4_SRQ_LIMIT_SUPPORT;
 
-	ret = xa_insert_irq(&rhp->qps, srq->wq.qid, srq, GFP_KERNEL);
-	if (ret)
-		goto err_free_queue;
-
 	if (udata) {
 		srq_key_mm = kmalloc(sizeof(*srq_key_mm), GFP_KERNEL);
 		if (!srq_key_mm) {
 			ret = -ENOMEM;
-			goto err_remove_handle;
+			goto err_free_queue;
 		}
 		srq_db_key_mm = kmalloc(sizeof(*srq_db_key_mm), GFP_KERNEL);
 		if (!srq_db_key_mm) {
@@ -2789,8 +2785,6 @@ err_free_srq_db_key_mm:
 	kfree(srq_db_key_mm);
 err_free_srq_key_mm:
 	kfree(srq_key_mm);
-err_remove_handle:
-	xa_erase_irq(&rhp->qps, srq->wq.qid);
 err_free_queue:
 	free_srq_queue(srq, ucontext ? &ucontext->uctx : &rhp->rdev.uctx,
 		       srq->wr_waitp);
@@ -2813,8 +2807,6 @@ void c4iw_destroy_srq(struct ib_srq *ibsrq, struct ib_udata *udata)
 	rhp = srq->rhp;
 
 	pr_debug("%s id %d\n", __func__, srq->wq.qid);
-
-	xa_erase_irq(&rhp->qps, srq->wq.qid);
 	ucontext = rdma_udata_to_drv_context(udata, struct c4iw_ucontext,
 					     ibucontext);
 	free_srq_queue(srq, ucontext ? &ucontext->uctx : &rhp->rdev.uctx,

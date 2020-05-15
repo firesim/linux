@@ -13,6 +13,7 @@
 struct task_struct;
 struct rusage;
 union thread_union;
+struct css_set;
 
 /* All the bits taken by the old clone syscall. */
 #define CLONE_LEGACY_FLAGS 0xffffffffULL
@@ -26,6 +27,12 @@ struct kernel_clone_args {
 	unsigned long stack;
 	unsigned long stack_size;
 	unsigned long tls;
+	pid_t *set_tid;
+	/* Number of elements in *set_tid */
+	size_t set_tid_size;
+	int cgroup;
+	struct cgroup *cgrp;
+	struct css_set *cset;
 };
 
 /*
@@ -105,7 +112,11 @@ extern void sched_exec(void);
 #define sched_exec()   {}
 #endif
 
-#define get_task_struct(tsk) do { refcount_inc(&(tsk)->usage); } while(0)
+static inline struct task_struct *get_task_struct(struct task_struct *t)
+{
+	refcount_inc(&t->usage);
+	return t;
+}
 
 extern void __put_task_struct(struct task_struct *t);
 
@@ -115,7 +126,7 @@ static inline void put_task_struct(struct task_struct *t)
 		__put_task_struct(t);
 }
 
-struct task_struct *task_rcu_dereference(struct task_struct **ptask);
+void put_task_struct_rcu_user(struct task_struct *task);
 
 #ifdef CONFIG_ARCH_WANTS_DYNAMIC_TASK_STRUCT
 extern int arch_task_struct_size __read_mostly;

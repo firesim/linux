@@ -215,6 +215,7 @@ static int zx_gpio_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct zx_gpio *chip;
+	struct gpio_irq_chip *girq;
 	int irq, id, ret;
 
 	chip = devm_kzalloc(dev, sizeof(*chip), GFP_KERNEL);
@@ -225,13 +226,11 @@ static int zx_gpio_probe(struct platform_device *pdev)
 	if (IS_ERR(chip->base))
 		return PTR_ERR(chip->base);
 
-	raw_spin_lock_init(&chip->lock);
-	if (of_property_read_bool(dev->of_node, "gpio-ranges")) {
-		chip->gc.request = gpiochip_generic_request;
-		chip->gc.free = gpiochip_generic_free;
-	}
-
 	id = of_alias_get_id(dev->of_node, "gpio");
+
+	raw_spin_lock_init(&chip->lock);
+	chip->gc.request = gpiochip_generic_request;
+	chip->gc.free = gpiochip_generic_free;
 	chip->gc.direction_input = zx_direction_input;
 	chip->gc.direction_output = zx_direction_output;
 	chip->gc.get = zx_get_value;
@@ -242,32 +241,30 @@ static int zx_gpio_probe(struct platform_device *pdev)
 	chip->gc.parent = dev;
 	chip->gc.owner = THIS_MODULE;
 
-	ret = gpiochip_add_data(&chip->gc, chip);
-	if (ret)
-		return ret;
-
 	/*
 	 * irq_chip support
 	 */
 	writew_relaxed(0xffff, chip->base + ZX_GPIO_IM);
 	writew_relaxed(0, chip->base + ZX_GPIO_IE);
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(dev, "invalid IRQ\n");
-		gpiochip_remove(&chip->gc);
-		return -ENODEV;
-	}
+	if (irq < 0)
+		return irq;
+	girq = &chip->gc.irq;
+	girq->chip = &zx_irqchip;
+	girq->parent_handler = zx_irq_handler;
+	girq->num_parents = 1;
+	girq->parents = devm_kcalloc(&pdev->dev, 1,
+				     sizeof(*girq->parents),
+				     GFP_KERNEL);
+	if (!girq->parents)
+		return -ENOMEM;
+	girq->parents[0] = irq;
+	girq->default_type = IRQ_TYPE_NONE;
+	girq->handler = handle_simple_irq;
 
-	ret = gpiochip_irqchip_add(&chip->gc, &zx_irqchip,
-				   0, handle_simple_irq,
-				   IRQ_TYPE_NONE);
-	if (ret) {
-		dev_err(dev, "could not add irqchip\n");
-		gpiochip_remove(&chip->gc);
+	ret = gpiochip_add_data(&chip->gc, chip);
+	if (ret)
 		return ret;
-	}
-	gpiochip_set_chained_irqchip(&chip->gc, &zx_irqchip,
-				     irq, zx_irq_handler);
 
 	platform_set_drvdata(pdev, chip);
 	dev_info(dev, "ZX GPIO chip registered\n");

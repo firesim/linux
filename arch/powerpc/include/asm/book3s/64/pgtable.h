@@ -289,7 +289,6 @@ extern unsigned long __kernel_io_end;
 #define KERN_IO_END __kernel_io_end
 
 extern struct page *vmemmap;
-extern unsigned long ioremap_bot;
 extern unsigned long pci_io_base;
 #endif /* __ASSEMBLY__ */
 
@@ -317,6 +316,7 @@ extern unsigned long pci_io_base;
 #define  PHB_IO_BASE	(ISA_IO_END)
 #define  PHB_IO_END	(KERN_IO_START + FULL_IO_SIZE)
 #define IOREMAP_BASE	(PHB_IO_END)
+#define IOREMAP_START	(ioremap_bot)
 #define IOREMAP_END	(KERN_IO_END)
 
 /* Advertise special mapping type for AGP */
@@ -608,8 +608,10 @@ static inline bool pte_access_permitted(pte_t pte, bool write)
  */
 static inline pte_t pfn_pte(unsigned long pfn, pgprot_t pgprot)
 {
-	return __pte((((pte_basic_t)(pfn) << PAGE_SHIFT) & PTE_RPN_MASK) |
-		     pgprot_val(pgprot));
+	VM_BUG_ON(pfn >> (64 - PAGE_SHIFT));
+	VM_BUG_ON((pfn << PAGE_SHIFT) & ~PTE_RPN_MASK);
+
+	return __pte(((pte_basic_t)pfn << PAGE_SHIFT) | pgprot_val(pgprot));
 }
 
 static inline unsigned long pte_pfn(pte_t pte)
@@ -1301,7 +1303,9 @@ extern void serialize_against_pte_lookup(struct mm_struct *mm);
 
 static inline pmd_t pmd_mkdevmap(pmd_t pmd)
 {
-	return __pmd(pmd_val(pmd) | (_PAGE_PTE | _PAGE_DEVMAP));
+	if (radix_enabled())
+		return radix__pmd_mkdevmap(pmd);
+	return hash__pmd_mkdevmap(pmd);
 }
 
 static inline int pmd_devmap(pmd_t pmd)
@@ -1353,18 +1357,21 @@ static inline bool is_pte_rw_upgrade(unsigned long old_val, unsigned long new_va
  * Like pmd_huge() and pmd_large(), but works regardless of config options
  */
 #define pmd_is_leaf pmd_is_leaf
+#define pmd_leaf pmd_is_leaf
 static inline bool pmd_is_leaf(pmd_t pmd)
 {
 	return !!(pmd_raw(pmd) & cpu_to_be64(_PAGE_PTE));
 }
 
 #define pud_is_leaf pud_is_leaf
+#define pud_leaf pud_is_leaf
 static inline bool pud_is_leaf(pud_t pud)
 {
 	return !!(pud_raw(pud) & cpu_to_be64(_PAGE_PTE));
 }
 
 #define pgd_is_leaf pgd_is_leaf
+#define pgd_leaf pgd_is_leaf
 static inline bool pgd_is_leaf(pgd_t pgd)
 {
 	return !!(pgd_raw(pgd) & cpu_to_be64(_PAGE_PTE));

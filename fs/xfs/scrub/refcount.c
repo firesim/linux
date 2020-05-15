@@ -336,12 +336,11 @@ xchk_refcountbt_rec(
 {
 	struct xfs_mount	*mp = bs->cur->bc_mp;
 	xfs_agblock_t		*cow_blocks = bs->private;
-	xfs_agnumber_t		agno = bs->cur->bc_private.a.agno;
+	xfs_agnumber_t		agno = bs->cur->bc_ag.agno;
 	xfs_agblock_t		bno;
 	xfs_extlen_t		len;
 	xfs_nlink_t		refcount;
 	bool			has_cowflag;
-	int			error = 0;
 
 	bno = be32_to_cpu(rec->refc.rc_startblock);
 	len = be32_to_cpu(rec->refc.rc_blockcount);
@@ -366,7 +365,7 @@ xchk_refcountbt_rec(
 
 	xchk_refcountbt_xref(bs->sc, bno, len, refcount);
 
-	return error;
+	return 0;
 }
 
 /* Make sure we have as many refc blocks as the rmap says. */

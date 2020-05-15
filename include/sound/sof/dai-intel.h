@@ -76,12 +76,24 @@ struct sof_ipc_dai_ssp_params {
 	uint16_t tdm_per_slot_padding_flag;
 	uint32_t clks_control;
 	uint32_t quirks;
+	uint32_t bclk_delay;	/* guaranteed time (ms) for which BCLK
+				 * will be driven, before sending data
+				 */
 } __packed;
 
 /* HDA Configuration Request - SOF_IPC_DAI_HDA_CONFIG */
 struct sof_ipc_dai_hda_params {
 	struct sof_ipc_hdr hdr;
 	uint32_t link_dma_ch;
+} __packed;
+
+/* ALH Configuration Request - SOF_IPC_DAI_ALH_CONFIG */
+struct sof_ipc_dai_alh_params {
+	struct sof_ipc_hdr hdr;
+	uint32_t stream_id;
+
+	/* reserved for future use */
+	uint32_t reserved[15];
 } __packed;
 
 /* DMIC Configuration Request - SOF_IPC_DAI_DMIC_CONFIG */

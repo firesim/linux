@@ -182,12 +182,19 @@ void siw_qp_llp_close(struct siw_qp *qp)
  */
 void siw_qp_llp_write_space(struct sock *sk)
 {
-	struct siw_cep *cep = sk_to_cep(sk);
+	struct siw_cep *cep;
 
-	cep->sk_write_space(sk);
+	read_lock(&sk->sk_callback_lock);
 
-	if (!test_bit(SOCK_NOSPACE, &sk->sk_socket->flags))
-		(void)siw_sq_start(cep->qp);
+	cep  = sk_to_cep(sk);
+	if (cep) {
+		cep->sk_write_space(sk);
+
+		if (!test_bit(SOCK_NOSPACE, &sk->sk_socket->flags))
+			(void)siw_sq_start(cep->qp);
+	}
+
+	read_unlock(&sk->sk_callback_lock);
 }
 
 static int siw_qp_readq_init(struct siw_qp *qp, int irq_size, int orq_size)
@@ -1063,8 +1070,8 @@ int siw_sqe_complete(struct siw_qp *qp, struct siw_sqe *sqe, u32 bytes,
 			cqe->imm_data = 0;
 			cqe->bytes = bytes;
 
-			if (cq->kernel_verbs)
-				cqe->base_qp = qp->ib_qp;
+			if (rdma_is_kernel_res(&cq->base_cq.res))
+				cqe->base_qp = &qp->base_qp;
 			else
 				cqe->qp_id = qp_id(qp);
 
@@ -1121,8 +1128,8 @@ int siw_rqe_complete(struct siw_qp *qp, struct siw_rqe *rqe, u32 bytes,
 			cqe->imm_data = 0;
 			cqe->bytes = bytes;
 
-			if (cq->kernel_verbs) {
-				cqe->base_qp = qp->ib_qp;
+			if (rdma_is_kernel_res(&cq->base_cq.res)) {
+				cqe->base_qp = &qp->base_qp;
 				if (inval_stag) {
 					cqe_flags |= SIW_WQE_REM_INVAL;
 					cqe->inval_stag = inval_stag;
@@ -1290,13 +1297,12 @@ void siw_rq_flush(struct siw_qp *qp)
 
 int siw_qp_add(struct siw_device *sdev, struct siw_qp *qp)
 {
-	int rv = xa_alloc(&sdev->qp_xa, &qp->ib_qp->qp_num, qp, xa_limit_32b,
+	int rv = xa_alloc(&sdev->qp_xa, &qp->base_qp.qp_num, qp, xa_limit_32b,
 			  GFP_KERNEL);
 
 	if (!rv) {
 		kref_init(&qp->ref);
 		qp->sdev = sdev;
-		qp->qp_num = qp->ib_qp->qp_num;
 		siw_dbg_qp(qp, "new QP\n");
 	}
 	return rv;

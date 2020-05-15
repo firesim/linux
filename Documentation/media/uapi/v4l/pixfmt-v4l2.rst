@@ -39,12 +39,17 @@ Single-planar format structure
 	to a multiple of the scale factor of any smaller planes. For
 	example when the image format is YUV 4:2:0, ``width`` and
 	``height`` must be multiples of two.
+
+	For compressed formats that contain the resolution information encoded
+	inside the stream, when fed to a stateful mem2mem decoder, the fields
+	may be zero to rely on the decoder to detect the right values. For more
+	details see :ref:`decoder` and format descriptions.
     * - __u32
       - ``pixelformat``
       - The pixel format or type of compression, set by the application.
 	This is a little endian
 	:ref:`four character code <v4l2-fourcc>`. V4L2 defines standard
-	RGB formats in :ref:`rgb-formats`, YUV formats in
+	RGB formats in :ref:`pixfmt-rgb`, YUV formats in
 	:ref:`yuv-formats`, and reserved codes in
 	:ref:`reserved-formats`
     * - __u32
@@ -138,7 +143,6 @@ Single-planar format structure
       - Flags set by the application or driver, see :ref:`format-flags`.
     * - union {
       - (anonymous)
-      -
     * - __u32
       - ``ycbcr_enc``
       - Y'CbCr encoding, from enum :c:type:`v4l2_ycbcr_encoding`.
@@ -152,7 +156,6 @@ Single-planar format structure
 	the driver for capture streams and by the application for output
 	streams, see :ref:`colorspaces`.
     * - }
-      -
       -
     * - __u32
       - ``quantization``

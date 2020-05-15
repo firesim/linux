@@ -1,10 +1,10 @@
 /*
- * Marvell Wireless LAN device driver: HW/FW Initialization
+ * NXP Wireless LAN device driver: HW/FW Initialization
  *
- * Copyright (C) 2011-2014, Marvell International Ltd.
+ * Copyright 2011-2020 NXP
  *
- * This software file (the "File") is distributed by Marvell International
- * Ltd. under the terms of the GNU General Public License Version 2, June 1991
+ * This software file (the "File") is distributed by NXP
+ * under the terms of the GNU General Public License Version 2, June 1991
  * (the "License").  You may use, redistribute and/or modify this File in
  * accordance with the terms and conditions of the License, a copy of which
  * is available by writing to the Free Software Foundation, Inc.,
@@ -59,7 +59,7 @@ static void wakeup_timer_fn(struct timer_list *t)
 	adapter->hw_status = MWIFIEX_HW_STATUS_RESET;
 	mwifiex_cancel_all_pending_cmd(adapter);
 
-	if (adapter->if_ops.card_reset && !adapter->hs_activated)
+	if (adapter->if_ops.card_reset)
 		adapter->if_ops.card_reset(adapter);
 }
 

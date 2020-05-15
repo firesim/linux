@@ -136,7 +136,7 @@ static int meson_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
 			dev_err(dev, "failed to set parent %s for %s: %d\n",
 				__clk_get_name(channel->clk_parent),
 				__clk_get_name(channel->clk), err);
-				return err;
+			return err;
 		}
 	}
 
@@ -159,11 +159,11 @@ static void meson_pwm_free(struct pwm_chip *chip, struct pwm_device *pwm)
 }
 
 static int meson_pwm_calc(struct meson_pwm *meson, struct pwm_device *pwm,
-			  struct pwm_state *state)
+			  const struct pwm_state *state)
 {
 	struct meson_pwm_channel *channel = pwm_get_chip_data(pwm);
 	unsigned int duty, period, pre_div, cnt, duty_cnt;
-	unsigned long fin_freq = -1;
+	unsigned long fin_freq;
 
 	duty = state->duty_cycle;
 	period = state->period;
@@ -265,7 +265,7 @@ static void meson_pwm_disable(struct meson_pwm *meson, struct pwm_device *pwm)
 }
 
 static int meson_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
-			   struct pwm_state *state)
+			   const struct pwm_state *state)
 {
 	struct meson_pwm_channel *channel = pwm_get_chip_data(pwm);
 	struct meson_pwm *meson = to_meson_pwm(chip);

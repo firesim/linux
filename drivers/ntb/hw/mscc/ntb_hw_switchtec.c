@@ -285,7 +285,7 @@ static int switchtec_ntb_mw_set_trans(struct ntb_dev *ntb, int pidx, int widx,
 	if (widx >= switchtec_ntb_mw_count(ntb, pidx))
 		return -EINVAL;
 
-	if (xlate_pos < 12)
+	if (size != 0 && xlate_pos < 12)
 		return -EINVAL;
 
 	if (!IS_ALIGNED(addr, BIT_ULL(xlate_pos))) {
@@ -306,7 +306,7 @@ static int switchtec_ntb_mw_set_trans(struct ntb_dev *ntb, int pidx, int widx,
 	if (rc)
 		return rc;
 
-	if (addr == 0 || size == 0) {
+	if (size == 0) {
 		if (widx < nr_direct_mw)
 			switchtec_ntb_mw_clr_direct(sndev, widx);
 		else

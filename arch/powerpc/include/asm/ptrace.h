@@ -138,6 +138,9 @@ extern unsigned long profile_pc(struct pt_regs *regs);
 #define profile_pc(regs) instruction_pointer(regs)
 #endif
 
+long do_syscall_trace_enter(struct pt_regs *regs);
+void do_syscall_trace_leave(struct pt_regs *regs);
+
 #define kernel_stack_pointer(regs) ((regs)->gpr[1])
 static inline int is_syscall_success(struct pt_regs *regs)
 {
@@ -203,7 +206,11 @@ do {									      \
 #endif /* __powerpc64__ */
 
 #define arch_has_single_step()	(1)
-#define arch_has_block_step()	(!cpu_has_feature(CPU_FTR_601))
+#ifndef CONFIG_BOOK3S_601
+#define arch_has_block_step()	(true)
+#else
+#define arch_has_block_step()	(false)
+#endif
 #define ARCH_HAS_USER_SINGLE_STEP_REPORT
 
 /*
@@ -272,6 +279,8 @@ static inline unsigned long regs_get_kernel_stack_nth(struct pt_regs *regs,
 #endif /* __ASSEMBLY__ */
 
 #ifndef __powerpc64__
+/* We need PT_SOFTE defined at all time to avoid #ifdefs */
+#define PT_SOFTE PT_MQ
 #else /* __powerpc64__ */
 #define PT_FPSCR32 (PT_FPR0 + 2*32 + 1)	/* each FP reg occupies 2 32-bit userspace slots */
 #define PT_VR0_32 164	/* each Vector reg occupies 4 slots in 32-bit */
