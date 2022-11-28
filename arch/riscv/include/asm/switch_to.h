@@ -42,6 +42,9 @@ static inline void fstate_restore(struct task_struct *task,
 		__fstate_restore(task);
 		__fstate_clean(regs);
 	}
+#ifdef CONFIG_RISCV_ROCC
+	regs->status |= SR_XS_INITIAL;
+#endif
 }
 
 static inline void __switch_to_aux(struct task_struct *prev,
