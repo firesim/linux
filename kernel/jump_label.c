@@ -15,6 +15,7 @@
 #include <linux/err.h>
 #include <linux/static_key.h>
 #include <linux/jump_label_ratelimit.h>
+#include <linux/jump_label_patch_log.h>
 #include <linux/bug.h>
 #include <linux/cpu.h>
 #include <asm/sections.h>
