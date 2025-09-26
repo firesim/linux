@@ -1,7 +1,7 @@
 #include <linux/jump_label_patch_log.h>
 #include <linux/atomic.h>
 
-#define JL_MAX 65536  // tune or make it cmdline-configurable
+#define JL_MAX 8192  // tune or make it cmdline-configurable
 static struct jl_entry jl_buf[JL_MAX];
 static atomic_t jl_widx = ATOMIC_INIT(0);
 
