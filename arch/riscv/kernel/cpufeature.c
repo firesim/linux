@@ -1221,16 +1221,15 @@ void __init_or_module riscv_cpufeature_patch_func(struct alt_entry *begin,
 
 		mutex_lock(&text_mutex);
 		patch_text_nosync(oldptr, altptr, alt->alt_len);
+		riscv_alternative_fix_offsets(oldptr, alt->alt_len, oldptr - altptr);
 		for (int i = 0; i < alt->alt_len; i += sizeof(u32)) {
 			u32 insn;
-			memcpy(&insn, altptr + i, sizeof(insn));
+			memcpy(&insn, oldptr + i, sizeof(insn));
 			jl_snap_append(&(struct jl_entry){
 					.addr = (u64)(oldptr + i),
 					.new_insn = insn,
 			});
 		}
-	
-		riscv_alternative_fix_offsets(oldptr, alt->alt_len, oldptr - altptr);
 		mutex_unlock(&text_mutex);
 	}
 }
