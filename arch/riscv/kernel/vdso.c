@@ -33,6 +33,15 @@ static struct __vdso_info vdso_info;
 static struct __vdso_info compat_vdso_info;
 #endif
 
+unsigned int vdso_enabled __read_mostly = 1;
+
+static int __init vdso_setup(char *s)
+{
+	vdso_enabled = simple_strtoul(s, NULL, 0);
+	return 1;
+}
+__setup("vdso=", vdso_setup);
+
 static int vdso_mremap(const struct vm_special_mapping *sm,
 		       struct vm_area_struct *new_vma)
 {

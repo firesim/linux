@@ -15,6 +15,7 @@
 #include <asm/byteorder.h>
 #include <asm/cacheinfo.h>
 #include <asm/cpufeature.h>
+#include <asm/vdso.h>
 
 /*
  * These are used to set parameters in the core dumps.
@@ -90,8 +91,9 @@ do {								\
 	 * warning of cast from pointer to integer for		\
 	 * COMPAT ELFCLASS32.					\
 	 */							\
-	NEW_AUX_ENT(AT_SYSINFO_EHDR,				\
-		(elf_addr_t)(ulong)current->mm->context.vdso);	\
+	if (vdso_enabled)					\
+		NEW_AUX_ENT(AT_SYSINFO_EHDR,			\
+			(elf_addr_t)(ulong)current->mm->context.vdso); \
 	NEW_AUX_ENT(AT_L1I_CACHESIZE,				\
 		get_cache_size(1, CACHE_TYPE_INST));		\
 	NEW_AUX_ENT(AT_L1I_CACHEGEOMETRY,			\
