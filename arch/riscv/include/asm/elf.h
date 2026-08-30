@@ -15,7 +15,17 @@
 #include <asm/byteorder.h>
 #include <asm/cacheinfo.h>
 #include <asm/cpufeature.h>
-#include <asm/vdso.h>
+
+/*
+ * Do NOT include <asm/vdso.h> here: it pulls in <generated/vdso-offsets.h>,
+ * which is produced by vdso_prepare, and vdso_prepare depends on prepare0
+ * (see arch/riscv/Makefile). asm-offsets.c is compiled during prepare0 and
+ * reaches this header via linux/elf.h, so the include would be circular and
+ * break any build starting from a clean tree. We only need vdso_enabled.
+ */
+#ifndef __ASSEMBLY__
+extern unsigned int vdso_enabled;
+#endif
 
 /*
  * These are used to set parameters in the core dumps.
