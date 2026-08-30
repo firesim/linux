@@ -33,6 +33,7 @@ extern char compat_vdso_start[], compat_vdso_end[];
 #endif /* CONFIG_COMPAT */
 
 extern char vdso_start[], vdso_end[];
+extern unsigned int vdso_enabled;
 
 #endif /* !__ASSEMBLY__ */
 

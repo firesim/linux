@@ -1367,6 +1367,12 @@ config BUILTIN_DTB_NAME
 	  DTS file path (without suffix, relative to arch/riscv/boot/dts)
 	  for the DTS file that will be used to produce the DTB linked into the
 	  kernel.
+	
+config JUMP_LABEL_PATCH_LOG_SNAPSHOT
+	bool "Snapshot jump labels"
+	depends on JUMP_LABEL
+	help
+	  Snapshot jump labels for debugging purposes.
 
 endmenu # "Boot options"
 

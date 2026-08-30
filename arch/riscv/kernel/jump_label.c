@@ -5,6 +5,7 @@
  * Based on arch/arm64/kernel/jump_label.c
  */
 #include <linux/jump_label.h>
+#include <linux/jump_label_patch_log.h>
 #include <linux/kernel.h>
 #include <linux/memory.h>
 #include <linux/mutex.h>
@@ -39,11 +40,13 @@ bool arch_jump_label_transform_queue(struct jump_entry *entry,
 	if (early_boot_irqs_disabled) {
 		riscv_patch_in_stop_machine = 1;
 		patch_insn_write(addr, &insn, sizeof(insn));
+		jl_snap_append(&(struct jl_entry){.addr = (u64)addr, .new_insn = insn});
 		riscv_patch_in_stop_machine = 0;
 	} else {
 		mutex_lock(&text_mutex);
 		patch_insn_write(addr, &insn, sizeof(insn));
 		mutex_unlock(&text_mutex);
+		jl_snap_append(&(struct jl_entry){.addr = (u64)addr, .new_insn = insn});
 	}
 
 	return true;
